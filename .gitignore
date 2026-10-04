@@ -1,0 +1,13 @@
+# Compiler and Keil output (the flashable images in build/ are kept)
+*.o
+*.d
+*.crf
+*.lst
+*.map
+__pycache__/
+MDK-ARM/project/
+MDK-ARM/*.uvguix.*
+
+# Written by tools/muse_drive.py
+build/muse_run_*.csv
+build/muse_calibration.json

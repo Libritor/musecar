@@ -10,8 +10,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gcc-bin", type=Path,
                         help="Directory containing arm-none-eabi-gcc.exe")
-    parser.add_argument("--mode", choices=("button",), default="button",
-                        help="The current main loop uses button control only")
+    parser.add_argument("--mode", choices=("serial",), default="serial",
+                        help="The current main loop takes serial commands and "
+                             "falls back to the button; build/button and "
+                             "build/uart hold earlier firmware")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     if args.gcc_bin:

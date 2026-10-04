@@ -71,6 +71,17 @@ void Motor_ControlButton(void);
  * No button debounce, UART parsing, or timeout is applied to this input.
  */
 void Motor_ControlInput(uint8_t forward_signal);
+
+/**
+ * @brief Control both motors from command bytes received on USART3
+ * (ST-LINK virtual COM port, 115200 8N1).
+ * ASCII '1': both motors at 75% PWM. ASCII '0': idle. Other bytes are ignored.
+ * The sender must repeat its command; after 500 ms without one the motors
+ * go idle and the link counts as silent.
+ * @retval 1 while commands are arriving and have been applied; 0 while the
+ * link is silent, so the caller can fall back to Motor_ControlButton().
+ */
+uint8_t Motor_ControlSerial(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

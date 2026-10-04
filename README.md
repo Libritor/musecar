@@ -1,37 +1,56 @@
-# Button and input-signal motor control
+# Button, serial and Muse motor control
 
 The working example is revised in place for NUCLEO-F446ZE / STM32F446ZET6. Original files are in backup_original; board test history is in flash_report.md.
 
-## Two control functions
+## Control functions
 
-Both functions are declared in Core/Inc/main.h and implemented in Core/Src/main.c:
+The functions are declared in Core/Inc/main.h and implemented in Core/Src/main.c:
 
 ```c
 void Motor_ControlButton(void);
 void Motor_ControlInput(uint8_t forward_signal);
+uint8_t Motor_ControlSerial(void);
 ```
 
 - Motor_ControlButton reads the blue USER button on PC13 with 20 ms debounce. Pressed means both motors at 75% PWM; released means idle.
 - Motor_ControlInput accepts the caller's binary signal directly. Exactly 1 means both motors at 75% PWM; 0 or any other value means idle. It does not read the button, parse UART data, or apply a timeout.
+- Motor_ControlSerial takes command bytes from the ST-LINK virtual COM port (USART3, 115200 8N1) and passes them to Motor_ControlInput. ASCII `1` means forward, ASCII `0` means idle, and every other byte is ignored, so `1\n` works too. The sender has to keep repeating its command: after 500 ms without one the motors go idle and the function returns 0. Bytes are received by the USART3 interrupt, so none are lost while a status line is being printed.
 
-The current main loop calls only the button version:
+The main loop lets the PC drive while it is sending and falls back to the button otherwise:
 
 ```c
 while (1)
 {
-    /* Use button control for the current demo. */
-    Motor_ControlButton();
+    /* PC commands drive the car while they keep arriving; when the link is
+       silent the USER button works as before. */
+    if (Motor_ControlSerial() == 0U)
+    {
+        Motor_ControlButton();
+    }
 }
 ```
 
-For future integration, replace that call with the input version after obtaining the latest result:
+One image therefore serves both demos. With nothing sending, the board behaves as the earlier button firmware did and prints the same `BUTTON` and `PWM` lines. While commands arrive the button is ignored and the status line reads `SERIAL sig=1 cmd=1 ccr3=22500 ccr4=22500`. Call these functions from main-loop context after GPIO, TIM2 and USART3 initialization.
 
-```c
-/* Use the latest binary result from the application. */
-Motor_ControlInput(forward_signal);
-```
+## Driving the car from a Muse headband
 
-Use one control function per loop; calling both lets the later call overwrite the earlier state. Call from main-loop context after GPIO and TIM2 initialization. This software interface is not assigned to a physical input pin. The prior software override/latch API and UART control selector have been replaced by these two explicit functions. USART3 remains status-only.
+Muse -> MuseLog app on the phone -> OSC over Wi-Fi -> tools/muse_drive.py on the PC -> USB serial -> Motor_ControlSerial. Focused means forward, relaxed means stop. The commands travel over the board's ST-LINK USB cable, so the car stays tethered to the PC.
+
+1. Flash build/serial/Car_Demo.hex by copying it to the ST-LINK drive, as in flash_report.md, and leave the USB cable connected.
+2. `pip install pyserial python-osc numpy`
+3. `python tools/muse_drive.py`. It finds the ST-LINK COM port and prints this PC's addresses. Use `--serial COMx` to name the port, or `--serial none` to watch the index without a car.
+4. In MuseLog's OSC Streaming Settings set Target IP to one of those addresses and port 5000, turn on Full-rate raw EEG, then Start Streaming. The phone and the PC must be on the same Wi-Fi.
+5. Calibrate when prompted: 15 s relaxed with eyes closed until the beep, then 15 s focused with eyes open. Press SPACE to let the car move. SPACE pauses, R recalibrates, Q quits. `--reuse` skips calibration on a restart.
+
+Band powers are computed on the PC from the raw EEG (`/muse/eeg`, 2 s windows). MuseLog's own `*_absolute` band powers are only a fallback: in a live stream on 2026-10-04 they were exactly 0 for TP9 and AF8 and stayed unchanged for seconds at TP10. At 64 Hz (full rate off) there is no gamma band.
+
+The arousal index is MuseLog's (beta + gamma) / (alpha + theta), or plain beta / alpha. Each is computed per electrode, and the median over the electrodes with contact is used, because a mean of powers is swamped by one noisy electrode. Calibration prints how well each separates the two states and keeps the better one (`--index` forces one). The index is smoothed over about 1 s and scaled so that 0 is the relaxed level and 1 the focused level; the car goes forward above 0.6 and stops below 0.4 (`--go`, `--stop`).
+
+The script sends `0` while paused, when no electrode has contact and when the stream stops, and the firmware timeout stops the car if the script or the PC stalls. The script keeps Windows awake while it runs; otherwise the idle timer suspends it mid-drive.
+
+Jaw, forehead and neck muscle activity raises beta and gamma far more than attention does, so tensing up also drives the car. Blinks lower the MuseLog index but leave beta / alpha about unchanged.
+
+To try the chain without a headband, start muse_drive.py and then `python tools/fake_muse.py`, which sends made-up relaxed and focused band powers in MuseLog's format.
 
 ## Wiring and behavior
 
@@ -51,25 +70,34 @@ For an L298N module, remove ENA/ENB jumpers and connect the motors to OUT1/OUT2 
 
 ## Build
 
-Open MDK-ARM/project.uvprojx in Keil and rebuild. Alternatively, from the workspace root:
+Open MDK-ARM/project.uvprojx in Keil and rebuild. Alternatively, from this folder:
 
 ```powershell
-python "example/Motor_PWM - Demo/project/tools/build.py" --gcc-bin ".tools/arm-gcc-14.2/bin" --mode button
+python tools/build.py --gcc-bin "<Arm GNU Toolchain>/bin"
 ```
 
-Outputs are build/button/Car_Demo.elf, .hex, .bin and .map. The standalone GCC build uses the example's HAL/CMSIS and application files, plus the STM32F446 startup and linker script copied from Project/Car_Demo. Unreferenced camera config.c is excluded, matching the original Keil target. Historical build/uart outputs belong to earlier firmware and do not represent the current main loop.
+Outputs are build/serial/Car_Demo.elf, .hex, .bin and .map. The standalone GCC build uses the example's HAL/CMSIS and application files, plus the STM32F446 startup and linker script copied from Project/Car_Demo. Unreferenced camera config.c is excluded, matching the original Keil target. build/button holds the earlier button-only firmware, the image the board tests in flash_report.md were run on; build/uart is older still. Neither represents the current main loop.
 
-The refactored project compiled and linked with Arm GNU GCC 14.2.Rel1 and -Wall -Werror: text=9608, data=96, bss=2056 bytes. Standard nosys file-I/O linker warnings remain; this application does not use file I/O. The current refactor was flashed through the ST-LINK virtual disk and passed a 30-second COM7 button/register test: errors=[], forward_seen=true, final_neutral=true. Motor_ControlInput remains unused and has not been exercised on hardware. Physical PWM waveforms and motor motion have not been measured by these tests.
+The current source compiled and linked with Arm GNU GCC 14.2.Rel1 and -Wall -Werror: text=10064, data=96, bss=2072 bytes. Standard nosys file-I/O linker warnings remain; this application does not use file I/O. The Keil target has not been rebuilt with the serial changes.
+
+## Tests of the serial firmware and the Muse bridge
+
+The serial firmware is on the board (flash_report.md). There it reported `BUTTON` lines with nothing sent, `SERIAL sig=0 cmd=0` while `0` was being sent, and `BUTTON` lines again after sending stopped. The forward command has not been sent to the real board yet. What has been checked without the board:
+
+- `python tools/emulate_firmware.py --gcc-bin "<Arm GNU Toolchain>/bin"` (needs `pip install unicorn`) runs build/serial/Car_Demo.bin on an emulated Cortex-M4 with stand-in peripherals. All 23 checks pass: idle at boot, button press and release as before, `1` and `0` commands, the 500 ms timeout, other bytes and framing errors ignored, the button ignored while the PC is sending and working again afterwards.
+- Rebuilding the earlier button-only source with the same compiler reproduces build/button/Car_Demo.hex exactly (SHA256 1725930298df068e...), so this toolchain matches the one behind flash_report.md.
+- muse_drive.py was run against fake_muse.py and a stand-in for the board's serial protocol: calibration, forward within about 1 s of the focused state, stop within about 1 s of the relaxed state, and idle when the stream ended.
+
+Not checked: forward motion under serial control on the real board, and a full muse_drive.py run (calibration and driving) with a live headband. Replaying an earlier eyes-open / eyes-closed recording through the index gave weak separation (calibration separation 0.1 to 1.0), so expect to need a good electrode fit and to recalibrate; the script prints the separation after each calibration and warns when it is low.
 
 ## Diagnostics
 
-Button control reports button state, PWM compare values, and timer/GPIO registers over ST-LINK USB at 115200, 8N1. Prior board checks confirmed both channels at 75%, active-high PWM1, PB10/PB11 AF1, and zero duty after release. These checks do not measure electrical waveforms or motor rotation. Diagnostic transmission may add up to 25 ms polling delay; debounce timing was not precisely measured.
+Button and serial control both report their state, PWM compare values, and timer/GPIO registers over ST-LINK USB at 115200, 8N1, on every change and once a second. Prior board checks confirmed both channels at 75%, active-high PWM1, PB10/PB11 AF1, and zero duty after release. These checks do not measure electrical waveforms or motor rotation. Diagnostic transmission may add up to 25 ms polling delay; debounce timing was not precisely measured.
 
-To read register reports without sending motor commands:
+To read register reports without sending motor commands (not while muse_drive.py holds the port; the port is fixed to COM7 in the script):
 
 ```powershell
-$env:PYTHONPATH = "$PWD/.tools/python-libs"
-python "example/Motor_PWM - Demo/project/tools/check_pwm.py" --seconds 30
+python tools/check_pwm.py --seconds 30
 ```
 
 Keep changes inside CubeMX USER CODE sections with KeepUserCode enabled. Regeneration has not been verified for the current refactor.

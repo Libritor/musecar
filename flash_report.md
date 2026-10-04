@@ -1,6 +1,14 @@
 # Flash attempt: 2026-10-04
 
-## Latest: two-function refactor flashed and tested
+## Latest: serial control with button fallback flashed
+
+- Flashed build/serial/Car_Demo.hex (Motor_ControlSerial with USART3 receive interrupt, 500 ms timeout, button fallback). HEX SHA256: 0a00f64482df4d159f91ce798e1520a36eea8ef72eea4f5fff6a1325dbbf08da.
+- Different PC from the earlier entries: the same ST-LINK (serial 0670FF485051727187182229) is COM6 and drive D: (NOD_F446ZE) here. Copied the HEX to D:; it was consumed, no FAIL.TXT.
+- Before flashing the board reported `BUTTON raw=0 cmd=0` (earlier button firmware).
+- After flashing, with nothing sent: `BUTTON raw=0 cmd=0 ccr3=0 ccr4=0`. While `0` was sent ten times a second: `SERIAL sig=0 cmd=0 ccr3=0 ccr4=0`. After sending stopped: `BUTTON` lines again. tools/muse_drive.py found COM6 by itself and read back `cmd=0`.
+- This confirms on the board that command bytes are received and that the link times out back to button control. The forward command (`1`) was not sent, so PWM at 75% under serial control, motor motion and the button press on this firmware were not exercised here.
+
+## Earlier: two-function refactor flashed and tested
 
 - Flashed build/button/Car_Demo.hex after splitting Motor_ControlButton() and Motor_ControlInput(uint8_t). The main loop calls only the button version; input control remains reserved and unused.
 - HEX SHA256: 1725930298df068ed4b2fef92816e782c68675dc4548cfd9b9893817e07566de. The compiled button binary matches the previously tested button behavior; the unused input function is removed from the linked image by section garbage collection.

@@ -32,6 +32,8 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define MOTOR_BUTTON_DEBOUNCE_MS 20U
+/* A silent PC link stops the car after this long. */
+#define MOTOR_SERIAL_TIMEOUT_MS 500U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -48,6 +50,10 @@ UART_HandleTypeDef huart3;
 static uint8_t motor_command = 0U;
 static uint8_t button_candidate = 0U;
 static uint32_t button_changed_tick = 0U;
+/* Written by USART3_IRQHandler, read by Motor_ControlSerial. */
+static volatile uint8_t serial_active = 0U;
+static volatile uint8_t serial_signal = 0U;
+static volatile uint32_t serial_tick = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -57,6 +63,7 @@ static void MX_TIM2_Init(void);
 static void MX_USART3_UART_Init(void);
 /* USER CODE BEGIN PFP */
 static void Motor_SetCommand(uint8_t command);
+static void Motor_ReportRegisters(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -104,14 +111,22 @@ int main(void)
     Error_Handler();
   }
   button_changed_tick = HAL_GetTick();
+  /* Command bytes from the PC arrive by interrupt on the ST-LINK COM port. */
+  HAL_NVIC_SetPriority(USART3_IRQn, 5U, 0U);
+  HAL_NVIC_EnableIRQ(USART3_IRQn);
+  __HAL_UART_ENABLE_IT(&huart3, UART_IT_RXNE);
 /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /* Use button control for the current demo. */
-    Motor_ControlButton();
+    /* PC commands drive the car while they keep arriving; when the link is
+       silent the USER button works as before. */
+    if (Motor_ControlSerial() == 0U)
+    {
+      Motor_ControlButton();
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -344,26 +359,101 @@ void Motor_ControlButton(void)
     {
       (void)HAL_UART_Transmit(&huart3, (uint8_t *)reply, (uint16_t)length, 10U);
     }
-    {
-      char registers[224];
-      int count = snprintf(registers, sizeof(registers),
-                           "PWM pclk=%lu psc=%lu arr=%lu ccr3=%lu ccr4=%lu "
-                           "cr1=%lu ccer=%lu ccmr2=%lu moder=%lu afr=%lu odr=%lu\r\n",
-                           (unsigned long)HAL_RCC_GetPCLK1Freq(),
-                           (unsigned long)TIM2->PSC, (unsigned long)TIM2->ARR,
-                           (unsigned long)TIM2->CCR3, (unsigned long)TIM2->CCR4,
-                           (unsigned long)TIM2->CR1, (unsigned long)TIM2->CCER,
-                           (unsigned long)TIM2->CCMR2, (unsigned long)GPIOB->MODER,
-                           (unsigned long)GPIOB->AFR[1], (unsigned long)GPIOB->ODR);
-      if (count > 0 && (size_t)count < sizeof(registers))
-      {
-        (void)HAL_UART_Transmit(&huart3, (uint8_t *)registers, (uint16_t)count, 25U);
-      }
-    }
+    Motor_ReportRegisters();
     reported_command = motor_command;
     last_report_tick = now;
   }
   HAL_Delay(1U);
+}
+
+static void Motor_ReportRegisters(void)
+{
+  char registers[224];
+  int count = snprintf(registers, sizeof(registers),
+                       "PWM pclk=%lu psc=%lu arr=%lu ccr3=%lu ccr4=%lu "
+                       "cr1=%lu ccer=%lu ccmr2=%lu moder=%lu afr=%lu odr=%lu\r\n",
+                       (unsigned long)HAL_RCC_GetPCLK1Freq(),
+                       (unsigned long)TIM2->PSC, (unsigned long)TIM2->ARR,
+                       (unsigned long)TIM2->CCR3, (unsigned long)TIM2->CCR4,
+                       (unsigned long)TIM2->CR1, (unsigned long)TIM2->CCER,
+                       (unsigned long)TIM2->CCMR2, (unsigned long)GPIOB->MODER,
+                       (unsigned long)GPIOB->AFR[1], (unsigned long)GPIOB->ODR);
+  if (count > 0 && (size_t)count < sizeof(registers))
+  {
+    (void)HAL_UART_Transmit(&huart3, (uint8_t *)registers, (uint16_t)count, 25U);
+  }
+}
+
+/* Keeps the newest command byte: ASCII '1' = forward, '0' = idle. */
+void USART3_IRQHandler(void)
+{
+  /* Reading SR then DR clears RXNE and any overrun, noise or framing flag. */
+  uint32_t status = USART3->SR;
+  uint8_t byte = (uint8_t)USART3->DR;
+
+  if ((status & USART_SR_RXNE) != 0U &&
+      (status & (USART_SR_FE | USART_SR_NE)) == 0U &&
+      (byte == (uint8_t)'0' || byte == (uint8_t)'1'))
+  {
+    serial_signal = (uint8_t)(byte - (uint8_t)'0');
+    serial_tick = HAL_GetTick();
+    serial_active = 1U;
+  }
+}
+
+uint8_t Motor_ControlSerial(void)
+{
+  static uint32_t last_report_tick = 0U;
+  static uint8_t reported_command = 255U;
+  uint32_t now;
+  uint8_t active;
+  uint8_t signal;
+  uint8_t expired = 0U;
+
+  /* Take the handler's values as one consistent set. */
+  HAL_NVIC_DisableIRQ(USART3_IRQn);
+  now = HAL_GetTick();
+  if (serial_active != 0U &&
+      (uint32_t)(now - serial_tick) > MOTOR_SERIAL_TIMEOUT_MS)
+  {
+    serial_active = 0U;
+    serial_signal = 0U;
+    expired = 1U;
+  }
+  active = serial_active;
+  signal = serial_signal;
+  HAL_NVIC_EnableIRQ(USART3_IRQn);
+
+  if (active == 0U)
+  {
+    if (expired != 0U)
+    {
+      /* The PC stopped sending: stop before the button takes over. */
+      Motor_ControlInput(0U);
+      reported_command = 255U;
+    }
+    return 0U;
+  }
+
+  Motor_ControlInput(signal);
+  if (motor_command != reported_command ||
+      (uint32_t)(now - last_report_tick) >= 1000U)
+  {
+    char reply[96];
+    int length = snprintf(reply, sizeof(reply),
+                          "SERIAL sig=%u cmd=%u ccr3=%lu ccr4=%lu\r\n",
+                          (unsigned)signal, (unsigned)motor_command,
+                          (unsigned long)TIM2->CCR3, (unsigned long)TIM2->CCR4);
+    if (length > 0 && (size_t)length < sizeof(reply))
+    {
+      (void)HAL_UART_Transmit(&huart3, (uint8_t *)reply, (uint16_t)length, 10U);
+    }
+    Motor_ReportRegisters();
+    reported_command = motor_command;
+    last_report_tick = now;
+  }
+  HAL_Delay(1U);
+  return 1U;
 }
 /* USER CODE END 4 */
 

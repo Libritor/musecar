@@ -19,9 +19,11 @@ The script sends '1' or '0' ten times a second. It sends '0' while paused,
 when the headband loses contact and when the stream stops, and the firmware
 stops by itself if the commands stop arriving.
 
-Keys: SPACE pause/resume, R recalibrate, Q quit.
+Keys: SPACE begin calibration, then pause/resume the car; R recalibrate;
+Q quit. Prompts are spoken as well as printed (--quiet turns that off), and
+every tick is logged to build/muse_run_<time>.csv.
 
-    python tools/muse_drive.py                 # finds the ST-LINK COM port
+    python tools/muse_drive.py                 # uses the ST-LINK COM port
     python tools/muse_drive.py --serial COM7
     python tools/muse_drive.py --serial none   # no car: watch the index only
 """
@@ -37,6 +39,7 @@ import re
 import shutil
 import socket
 import statistics
+import subprocess
 import sys
 import threading
 import time
@@ -189,24 +192,34 @@ class MuseStream(threading.Thread):
 
 
 class Car:
-    """The board's serial link. Without a port, commands go nowhere."""
+    """The board's serial link: "auto" (the ST-LINK, whenever it is plugged
+    in), a COM port or pyserial URL, or None for no car at all."""
 
     def __init__(self, port):
         self.port = port
         self.link = None
+        self.device = None
         if port:
             try:
                 self.open()
+                print(f"Car: {self.device}.")
             except serial.SerialException:
-                print(f"{port} is not there; it is picked up when the board "
-                      "is plugged in.")
+                print("Car: not plugged in yet; it is picked up when the "
+                      "board's ST-LINK USB appears.")
         self.retry_at = 0.0
         self.text = b""
         self.report = None  # (time, "SERIAL" or "BUTTON", cmd) from the board
 
     def open(self):
-        self.link = serial.serial_for_url(self.port, baudrate=115200, timeout=0,
+        device = self.port
+        if device == "auto":
+            found = [p.device for p in list_ports.comports() if p.vid == 0x0483]
+            if not found:
+                raise serial.SerialException("no ST-LINK on USB")
+            device = found[0]
+        self.link = serial.serial_for_url(device, baudrate=115200, timeout=0,
                                           write_timeout=0.5)
+        self.device = device
 
     def send(self, forward, now):
         """Send one command and take in the status lines the board printed.
@@ -254,18 +267,6 @@ class Car:
             self.link = None
 
 
-def find_stlink():
-    """The COM port of the one connected ST-LINK."""
-    ports = [p for p in list_ports.comports() if p.vid == 0x0483]
-    if len(ports) == 1:
-        return ports[0].device
-    seen = ", ".join(f"{p.device} ({p.description})"
-                     for p in list_ports.comports()) or "none"
-    sys.exit(f"Expected one ST-LINK COM port, found {len(ports)}. Ports: "
-             f"{seen}. Plug the board's ST-LINK USB in, or pass --serial "
-             "COMx, or --serial none to run without the car.")
-
-
 def local_ips():
     try:
         found = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
@@ -293,18 +294,44 @@ def beep():
         print("\a", end="", flush=True)
 
 
+speech = True  # cleared by --quiet
+
+
+def say(text):
+    """Print the text and, on Windows, also speak it: the wearer has their
+    eyes closed for half of the calibration."""
+    note(text)
+    if speech and sys.platform == "win32":
+        script = ("Add-Type -AssemblyName System.Speech; (New-Object "
+                  "System.Speech.Synthesis.SpeechSynthesizer).Speak('"
+                  + text.replace("'", "''") + "')")
+        subprocess.Popen(["powershell", "-NoProfile", "-Command", script],
+                         creationflags=subprocess.CREATE_NO_WINDOW)
+
+
 last_shown = 0.0
+status_line_open = False  # the console cursor sits on a status line
 
 
 def show(text):
     """Status on one console line; once a second when output is a file."""
-    global last_shown
+    global last_shown, status_line_open
     if sys.stdout.isatty():
         width = shutil.get_terminal_size().columns - 1
         print("\r" + text[:width].ljust(width), end="", flush=True)
+        status_line_open = True
     elif time.monotonic() - last_shown >= 1.0:
         last_shown = time.monotonic()
         print(text, flush=True)
+
+
+def note(text):
+    """A message on its own line, below any status line."""
+    global status_line_open
+    if status_line_open:
+        print()
+        status_line_open = False
+    print(text, flush=True)
 
 
 run_log = None  # csv.writer when --log is given
@@ -357,11 +384,11 @@ def wait_for_signal(stream, wanted, car):
                 now - (last_good[better] or stream.first_packet or now) > 8.0
                 for better in sources[:position])
             if steady and better_dead:
-                print(f"\nSignal found ({source}).")
+                note(f"Signal found ({source}).")
                 if source == "raw" and stream.raw_rate == 64:
-                    print("Raw EEG is arriving at 64 Hz, which has no gamma "
-                          "band: turn on Full-rate raw EEG in MuseLog's OSC "
-                          "settings.")
+                    note("Raw EEG is arriving at 64 Hz, which has no gamma "
+                         "band: turn on Full-rate raw EEG in MuseLog's OSC "
+                         "settings.")
                 return source
         if stream.first_packet:
             show("MuseLog is streaming; waiting for electrode contact.  " +
@@ -370,9 +397,9 @@ def wait_for_signal(stream, wanted, car):
             show("Waiting for MuseLog packets...")
             if not hinted and now - started > 8:
                 hinted = True
-                print("\nNothing yet. Check: phone and PC on the same Wi-Fi, "
-                      "Target IP is this PC, the port matches, Start "
-                      "Streaming is pressed.")
+                note("Nothing yet. Check: phone and PC on the same Wi-Fi, "
+                     "Target IP is this PC, the port matches, Start "
+                     "Streaming is pressed.")
         time.sleep(TICK_S)
 
 
@@ -380,7 +407,7 @@ def wait_for_space(stream, car):
     """Hold the car idle until SPACE (True) or Q (False)."""
     if not msvcrt:
         return True
-    print("Press SPACE to begin.")
+    say("Press space to begin the calibration.")
     while (pressed := key()) != " ":
         if pressed == "q":
             return False
@@ -413,31 +440,38 @@ def calibrate(stream, source, car, args):
     """Relaxed and focused levels of the index that separates them best
     (or of --index); None if quit, {} if unusable."""
     seconds = args.calib_seconds
-    print(f"\nCalibration, two parts of {seconds:.0f} s. Sit still; keep your "
-          "jaw and forehead loose.")
-    print("  1. RELAX: eyes closed, breathe slowly, until the beep.")
-    print("  2. FOCUS: eyes open, look at the car and count down from 300 in "
-          "sevens, until the second beep.")
+    note(f"\nCalibration, two parts of {seconds:.0f} s. Sit still; keep your "
+         "jaw and forehead loose.")
+    note("  1. RELAX: eyes closed, breathe slowly, until the beep.")
+    note("  2. FOCUS: eyes open, look at the car and count down from 300 in "
+         "sevens, until the second beep.")
     if not args.armed and not wait_for_space(stream, car):
         return None
-    print("1/2 RELAX: eyes closed.")
+    say("1 of 2. Close your eyes and relax.")
     relaxed = collect(stream, source, seconds, car, "relax")
     if relaxed is None:
         return None
     beep()
-    print("\n2/2 FOCUS: eyes open, count down from 300 in sevens.")
+    say("\n2 of 2. Open your eyes and focus. Count down from 300 in sevens.")
     focused = collect(stream, source, seconds, car, "focus")
     if focused is None:
         return None
     beep()
-    print()
     enough = (seconds - SETTLE_S) / TICK_S / 2
     if len(relaxed) < enough or len(focused) < enough:
-        print("Too little usable signal during calibration (electrode "
-              "contact?).")
+        say("Too little usable signal during the calibration. Check the "
+            "electrode contact.")
         return {}
     chosen = choose_index(relaxed, focused, args.index)
-    return dict(chosen, source=source) if chosen else {}
+    if not chosen:
+        say("Calibration failed: focused did not come out above relaxed.")
+        return {}
+    verdict = ("Calibration done, but the two states overlap a lot; press R "
+               "to try again." if chosen["separation"] < 1.5
+               else "Calibration done.")
+    say(verdict + (" The car is live." if args.armed
+                   else " Press space to let the car move."))
+    return dict(chosen, source=source)
 
 
 def choose_index(relaxed, focused, wanted):
@@ -450,20 +484,16 @@ def choose_index(relaxed, focused, wanted):
             statistics.median(abs(v[name] - low) for v in relaxed),
             statistics.median(abs(v[name] - high) for v in focused))
         separation = (high - low) / max(spread, 1e-9)
-        print(f"  {name:10s} relaxed {10 ** low:.2f}  focused {10 ** high:.2f}"
-              f"  separation {separation:.1f}")
+        note(f"  {name:10s} relaxed {10 ** low:.2f}  focused {10 ** high:.2f}"
+             f"  separation {separation:.1f}")
         if best is None or separation > best[0]:
             best = (separation, name, low, high)
     separation, name, low, high = best
     if separation <= 0:
-        print("Focused did not come out above relaxed, so there is nothing "
-              "to steer by.")
         return {}
-    print(f"Using {name}.")
-    if separation < 1.5:
-        print("The two states overlap a lot: expect the car to be erratic. "
-              "R recalibrates.")
-    return {"index": name, "relaxed": low, "focused": high}
+    note(f"Using {name}.")
+    return {"index": name, "relaxed": low, "focused": high,
+            "separation": round(separation, 2)}
 
 
 def drive(stream, calibration, car, args):
@@ -474,7 +504,7 @@ def drive(stream, calibration, car, args):
     last_valid = 0.0
     weight = 1.0 if args.smooth <= 0 else 1 - math.exp(-TICK_S / args.smooth)
     low, high = calibration["relaxed"], calibration["focused"]
-    print("SPACE = start/pause the car   R = recalibrate   Q = quit")
+    note("SPACE = start/pause the car   R = recalibrate   Q = quit")
     meter = ""
     tick = time.monotonic()
     while True:
@@ -482,9 +512,10 @@ def drive(stream, calibration, car, args):
         pressed = key()
         if pressed == " ":
             armed = not armed
+            say("Car is live. Focus to drive, relax to stop." if armed
+                else "Paused.")
         elif pressed in ("r", "q", "\x1b"):
             car.send(False, now)
-            print()
             return "r" if pressed == "r" else "q"
         ratios = stream.index(calibration["source"], now)
         level = ""
@@ -548,14 +579,24 @@ def main():
     parser.add_argument("--armed", action="store_true",
                         help="never wait for SPACE: calibrate at once and "
                              "let the car move")
-    parser.add_argument("--log", type=Path,
-                        help="write one CSV row per tick to this file")
+    parser.add_argument("--log", default="auto",
+                        help="CSV with one row per tick; default "
+                             "build/muse_run_<time>.csv, 'none' for no log")
+    parser.add_argument("--quiet", action="store_true",
+                        help="do not speak the prompts")
     args = parser.parse_args()
-    global run_log
-    if args.log:
-        run_log = csv.writer(open(args.log, "w", newline="", buffering=1))
+    global run_log, speech
+    speech = not args.quiet
+    if args.log != "none":
+        path = Path(args.log)
+        if args.log == "auto":
+            path = (CALIBRATION.parent /
+                    time.strftime("muse_run_%Y%m%d_%H%M%S.csv"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        run_log = csv.writer(open(path, "w", newline="", buffering=1))
         run_log.writerow(["time", "phase", *INDEXES, *CHANNELS, "level",
                           "armed", "sent", "car"])
+        print(f"Logging every tick to {path}")
     if not args.stop < args.go:
         parser.error("--stop must be below --go")
     if args.calib_seconds < 2 * SETTLE_S:
@@ -567,15 +608,11 @@ def main():
         # ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED
         ctypes.windll.kernel32.SetThreadExecutionState(0x80000003)
 
-    if args.serial == "auto":
-        port = find_stlink()
-    else:
-        port = None if args.serial == "none" else args.serial
-    car = Car(port)
+    car = Car(None if args.serial == "none" else args.serial)
     stream = MuseStream(args.osc_port)
     stream.start()
-    print(f"Car: {port or 'none (index only)'}.  Listening for MuseLog on UDP "
-          f"{args.osc_port}; set its Target IP to one of: {local_ips()}")
+    print(f"Listening for MuseLog on UDP {args.osc_port}; in its OSC settings "
+          f"set Target IP to one of: {local_ips()}")
     try:
         source = wait_for_signal(stream, args.source, car)
         calibration = None
@@ -584,14 +621,14 @@ def main():
             if (saved.get("source") == source and saved.get("index") in
                     (INDEXES if args.index == "auto" else (args.index,))):
                 calibration = saved
-                print(f"Using the saved calibration ({saved['index']}).")
+                note(f"Using the saved calibration ({saved['index']}).")
         while source:
             if not calibration:
                 calibration = calibrate(stream, source, car, args)
                 if calibration is None:
                     break
                 if not calibration:
-                    print("Calibrating again. Q quits.")
+                    note("Calibrating again. Q quits.")
                     continue
                 CALIBRATION.parent.mkdir(parents=True, exist_ok=True)
                 CALIBRATION.write_text(json.dumps(calibration, indent=2),
@@ -600,13 +637,13 @@ def main():
                 break
             calibration = None
     except KeyboardInterrupt:
-        print()
+        pass
     finally:
         try:
             car.close()
         except serial.SerialException:
             pass
-    print("Stopped.")
+    note("Stopped.")
 
 
 if __name__ == "__main__":

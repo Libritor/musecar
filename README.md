@@ -36,11 +36,16 @@ One image therefore serves both demos. With nothing sending, the board behaves a
 
 Muse -> MuseLog app on the phone -> OSC over Wi-Fi -> tools/muse_drive.py on the PC -> USB serial -> Motor_ControlSerial. Focused means forward, relaxed means stop. The commands travel over the board's ST-LINK USB cable, so the car stays tethered to the PC.
 
-1. Flash build/serial/Car_Demo.hex by copying it to the ST-LINK drive, as in flash_report.md, and leave the USB cable connected.
-2. `pip install pyserial python-osc numpy`
-3. `python tools/muse_drive.py`. It finds the ST-LINK COM port and prints this PC's addresses. Use `--serial COMx` to name the port, or `--serial none` to watch the index without a car.
-4. In MuseLog's OSC Streaming Settings set Target IP to one of those addresses and port 5000, turn on Full-rate raw EEG, then Start Streaming. The phone and the PC must be on the same Wi-Fi.
-5. Calibrate when prompted: 15 s relaxed with eyes closed until the beep, then 15 s focused with eyes open. Press SPACE to let the car move. SPACE pauses, R recalibrates, Q quits. `--reuse` skips calibration on a restart.
+Session checklist (one-time: `pip install pyserial python-osc numpy`; the board already carries build/serial/Car_Demo.hex, see flash_report.md):
+
+1. Laptop on its charger. The bridge keeps the screen on, and on battery this laptop drained from 72% to 9% during one afternoon's attempts.
+2. Board's ST-LINK USB plugged into the laptop with a data cable; a steady red LED by that connector is normal. Motor power on, wheels off the table for the first run.
+3. Phone and laptop on the same Wi-Fi. In MuseLog: headband connected, OSC Streaming Settings with Target IP = the laptop (printed when the bridge starts; 10.0.0.185 on the home network), port 5000, Full-rate raw EEG on, then Start Streaming. Keep MuseLog in the foreground with the phone screen on: on 2026-10-04 the stream stopped after a few minutes with the phone idle.
+4. Double-click `Muse Car.cmd` (or run `python tools/muse_drive.py`). Click into that window; every key below goes there. It waits for the headband signal and for the board, and says so on its bottom line (`NO DATA FROM MUSELOG`, `CAR UNPLUGGED`, `car cmd=0`).
+5. Press SPACE when it asks. Calibration is spoken as well as printed: eyes closed and relaxed until the beep, then eyes open counting down from 300 in sevens until the second beep. It then reports how well the two states separate.
+6. Press SPACE to let the car move. Focus drives it forward, relaxing with eyes closed stops it. SPACE pauses, R recalibrates, Q quits. If the board is unplugged mid-run the bridge reconnects by itself and pauses the car until SPACE.
+
+Options: `--serial COMx` or `--serial none` (no car), `--reuse` (skip calibration on a restart), `--quiet` (no speech), `--log none` (every tick is otherwise logged to build/muse_run_<time>.csv, which is how a run can be looked at afterwards).
 
 Band powers are computed on the PC from the raw EEG (`/muse/eeg`, 2 s windows). MuseLog's own `*_absolute` band powers are only a fallback: in a live stream on 2026-10-04 they were exactly 0 for TP9 and AF8 and stayed unchanged for seconds at TP10. At 64 Hz (full rate off) there is no gamma band.
 
@@ -50,7 +55,7 @@ The script sends `0` while paused, when no electrode has contact and when the st
 
 Jaw, forehead and neck muscle activity raises beta and gamma far more than attention does, so tensing up also drives the car. Blinks lower the MuseLog index but leave beta / alpha about unchanged.
 
-To try the chain without a headband, start muse_drive.py and then `python tools/fake_muse.py`, which sends made-up relaxed and focused band powers in MuseLog's format.
+To try the chain without a headband, start `python tools/muse_drive.py --armed` and then `python tools/fake_muse.py`, which sends made-up relaxed and focused band powers in MuseLog's format; the car then runs for 25 s and stops for 25 s in turn.
 
 ## Wiring and behavior
 
@@ -86,9 +91,10 @@ The serial firmware is on the board (flash_report.md). There it reported `BUTTON
 
 - `python tools/emulate_firmware.py --gcc-bin "<Arm GNU Toolchain>/bin"` (needs `pip install unicorn`) runs build/serial/Car_Demo.bin on an emulated Cortex-M4 with stand-in peripherals. All 23 checks pass: idle at boot, button press and release as before, `1` and `0` commands, the 500 ms timeout, other bytes and framing errors ignored, the button ignored while the PC is sending and working again afterwards.
 - Rebuilding the earlier button-only source with the same compiler reproduces build/button/Car_Demo.hex exactly (SHA256 1725930298df068e...), so this toolchain matches the one behind flash_report.md.
-- muse_drive.py was run against fake_muse.py and a stand-in for the board's serial protocol: calibration, forward within about 1 s of the focused state, stop within about 1 s of the relaxed state, and idle when the stream ended.
+- muse_drive.py was run against fake_muse.py and a stand-in for the board's serial protocol: calibration, forward within about 1 s of the focused state, stop within about 1 s of the relaxed state, idle when the stream ended, and reconnection after the stand-in board was "unplugged" mid-run.
+- The real console flow was driven with injected keystrokes (2026-10-06): `Muse Car.cmd` opens, SPACE starts the calibration, SPACE lets the car move, the status line follows the simulated states, SPACE pauses, Q quits.
 
-Not checked: forward motion under serial control on the real board, and a full muse_drive.py run (calibration and driving) with a live headband. Replaying an earlier eyes-open / eyes-closed recording through the index gave weak separation (calibration separation 0.1 to 1.0), so expect to need a good electrode fit and to recalibrate; the script prints the separation after each calibration and warns when it is low.
+Not checked: forward motion under serial control on the real board, and a full run with a live headband. On 2026-10-04 four live attempts never got past the start prompt: the phone's stream stopped, the board's USB dropped twice, and the laptop battery ran down; nothing about the EEG side was tested. Replaying an earlier eyes-open / eyes-closed recording through the index gave weak separation (calibration separation 0.1 to 1.0), so expect to need a good electrode fit and to recalibrate; the script prints the separation after each calibration and warns when it is low.
 
 ## Diagnostics
 

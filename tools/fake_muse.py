@@ -2,9 +2,9 @@
 be tested without a headband.
 
 Alternates relaxed (strong alpha) and focused (strong beta) in MuseLog's
-default OSC format, starting relaxed. Start muse_drive.py first: it begins
-calibrating when these packets arrive, and the default --period then lines
-up with its relax and focus phases.
+default OSC format, starting relaxed. Start `muse_drive.py --armed` first:
+it begins calibrating about 10 s after these packets arrive, and the default
+--period then lines up with its relax and focus phases.
 """
 
 import argparse
@@ -22,8 +22,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ip", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)
-    parser.add_argument("--period", type=float, default=21,
-                        help="seconds in each state (default 21)")
+    parser.add_argument("--period", type=float, default=25,
+                        help="seconds in each state (default 25)")
     parser.add_argument("--seconds", type=float, default=0,
                         help="stop after this long; 0 = until Ctrl+C")
     args = parser.parse_args()

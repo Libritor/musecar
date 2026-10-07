@@ -895,8 +895,8 @@ def main():
                         help="muselog: (beta+gamma)/(alpha+theta); beta-alpha: "
                              "beta/alpha; auto: whichever calibration "
                              "separates better")
-    parser.add_argument("--calib-seconds", type=float, default=15,
-                        help="length of each calibration phase (default 15)")
+    parser.add_argument("--calib-seconds", type=float, default=25,
+                        help="length of each calibration phase (default 25)")
     parser.add_argument("--reuse", action="store_true",
                         help="skip calibration and use the last one saved")
     parser.add_argument("--go", type=float, default=0.6,

@@ -65,7 +65,8 @@ void Motor_ControlButton(void);
 /**
  * @brief Control both motors using the caller's forward signal.
  * @param forward_signal 1: both motors at 75% PWM; 2: both motors at full
- * power; 0: idle (zero PWM).
+ * power; 3: bear left (left motor 25%, right 75%); 4: bear right;
+ * 0: idle (zero PWM).
  * Any other value is treated as idle. Call from main-loop context
  * after peripheral initialization. Use one control function per loop:
  * button control will overwrite input control if both are called.
@@ -76,8 +77,8 @@ void Motor_ControlInput(uint8_t forward_signal);
 /**
  * @brief Control both motors from command bytes received on USART3
  * (ST-LINK virtual COM port, 115200 8N1).
- * ASCII '1': both motors at 75% PWM. ASCII '2': full power. ASCII '0': idle.
- * Other bytes are ignored.
+ * ASCII '1': both motors at 75% PWM. ASCII '2': full power. ASCII '3': bear
+ * left. ASCII '4': bear right. ASCII '0': idle. Other bytes are ignored.
  * The sender must repeat its command; after 500 ms without one the motors
  * go idle and the link counts as silent.
  * @retval 1 while commands are arriving and have been applied; 0 while the

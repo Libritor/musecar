@@ -18,7 +18,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", default="auto", help="COM port, default the ST-LINK")
     parser.add_argument("--seconds", type=float, default=4, help="length of each burst")
-    parser.add_argument("--power", choices=("normal", "full", "both"), default="both")
+    parser.add_argument("--power", default="both",
+                        choices=("normal", "full", "both", "left", "right", "all"),
+                        help="which bursts: normal (75%%), full, both of those, "
+                             "left or right turn, or all four")
     args = parser.parse_args()
     port = args.port
     if port == "auto":
@@ -28,7 +31,10 @@ def main():
         port = found[0]
     link = serial.Serial(port, 115200, timeout=0.05)
     print(f"Board on {port}. The board prints its state on every change.")
-    bursts = {"normal": [b"1"], "full": [b"2"], "both": [b"1", b"2"]}[args.power]
+    bursts = {"normal": [b"1"], "full": [b"2"], "both": [b"1", b"2"], "left": [b"3"],
+              "right": [b"4"], "all": [b"1", b"2", b"3", b"4"]}[args.power]
+    labels = {b"1": "75% PWM", b"2": "FULL POWER", b"3": "BEARING LEFT (left wheel 25%)",
+              b"4": "BEARING RIGHT (right wheel 25%)"}
     text = b""
 
     def listen(seconds, command=b"0"):
@@ -49,8 +55,7 @@ def main():
 
     try:
         for command in bursts:
-            label = "75% PWM" if command == b"1" else "FULL POWER"
-            print(f"\nForward at {label} for {args.seconds:.0f} s ...")
+            print(f"\nForward, {labels[command]}, for {args.seconds:.0f} s ...")
             listen(args.seconds, command)
             print("Stop for 2 s ...")
             listen(2.0, b"0")
@@ -59,7 +64,7 @@ def main():
     finally:
         link.write(b"0")
         link.close()
-    print("\nIf the board reported cmd=1 or cmd=2 but the wheels did not turn, the "
+    print("\nIf the board reported the command but the wheels did not turn, the "
           "problem is after the Nucleo: L298N power, ENA/ENB jumpers, wiring or "
           "motor supply voltage.")
 

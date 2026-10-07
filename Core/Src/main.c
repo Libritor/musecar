@@ -301,37 +301,46 @@ static void MX_GPIO_Init(void)
 void Motor_ControlInput(uint8_t forward_signal)
 {
   /* Apply the caller's signal directly, without button debounce. */
-  Motor_SetCommand((forward_signal == 1U || forward_signal == 2U) ?
+  Motor_SetCommand((forward_signal >= 1U && forward_signal <= 4U) ?
                    forward_signal : 0U);
 }
 
-/* The existing bridge wiring uses two direction inputs per motor. */
+/* The existing bridge wiring uses two direction inputs per motor.
+   1: both wheels at 75%. 2: both at full power. 3: bear left (left wheel
+   at 25%, right at 75%). 4: bear right. Anything else: idle. */
 static void Motor_SetCommand(uint8_t command)
 {
-  uint32_t pulse = 0U;
+  /* PWM duty = CCR / (ARR + 1), not CCR / ARR. A compare value above the
+     period holds the output high. */
+  uint32_t full = __HAL_TIM_GET_AUTORELOAD(&htim2) + 1U;
+  uint32_t normal = (full * 3U) / 4U;
+  uint32_t inner = full / 4U;
+  uint32_t left = 0U;
+  uint32_t right = 0U;
 
-  if (command == 1U || command == 2U)
+  switch (command)
   {
-    /* PWM duty = CCR / (ARR + 1), not CCR / ARR. A compare value above
-       the period holds the output high: 2 means full power. */
-    pulse = __HAL_TIM_GET_AUTORELOAD(&htim2) + 1U;
-    if (command == 1U)
-    {
-      pulse = (pulse * 3U) / 4U;
-    }
+    case 1U: left = normal; right = normal; break;
+    case 2U: left = full;   right = full;   break;
+    case 3U: left = inner;  right = normal; break;
+    case 4U: left = normal; right = inner;  break;
+    default: command = 0U;                  break;
+  }
+  if (command != 0U)
+  {
     /* Left motor reversed: IN1=0, IN2=1; right retains IN3=1, IN4=0. */
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0 | GPIO_PIN_3, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1 | GPIO_PIN_2, GPIO_PIN_SET);
   }
 
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, pulse);
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, pulse);
-  if (pulse == 0U)
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, left);   /* PB10, ENA */
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, right);  /* PB11, ENB */
+  if (command == 0U)
   {
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0 | GPIO_PIN_1 |
                             GPIO_PIN_2 | GPIO_PIN_3, GPIO_PIN_RESET);
   }
-  motor_command = (pulse == 0U) ? 0U : command;
+  motor_command = command;
 }
 
 void Motor_ControlButton(void)
@@ -391,7 +400,8 @@ static void Motor_ReportRegisters(void)
 }
 
 /* Keeps the newest command byte: ASCII '1' = forward at 75% PWM,
-   '2' = forward at full power, '0' = idle. */
+   '2' = forward at full power, '3' = bear left, '4' = bear right,
+   '0' = idle. */
 void USART3_IRQHandler(void)
 {
   /* Reading SR then DR clears RXNE and any overrun, noise or framing flag. */
@@ -400,7 +410,7 @@ void USART3_IRQHandler(void)
 
   if ((status & USART_SR_RXNE) != 0U &&
       (status & (USART_SR_FE | USART_SR_NE)) == 0U &&
-      byte >= (uint8_t)'0' && byte <= (uint8_t)'2')
+      byte >= (uint8_t)'0' && byte <= (uint8_t)'4')
   {
     serial_signal = (uint8_t)(byte - (uint8_t)'0');
     serial_tick = HAL_GetTick();

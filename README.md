@@ -13,8 +13,8 @@ uint8_t Motor_ControlSerial(void);
 ```
 
 - Motor_ControlButton reads the blue USER button on PC13 with 20 ms debounce. Pressed means both motors at 75% PWM; released means idle.
-- Motor_ControlInput accepts the caller's signal directly. 1 means both motors at 75% PWM, 2 means full power; 0 or any other value means idle. It does not read the button, parse UART data, or apply a timeout.
-- Motor_ControlSerial takes command bytes from the ST-LINK virtual COM port (USART3, 115200 8N1) and passes them to Motor_ControlInput. ASCII `1` means forward at 75% PWM, ASCII `2` forward at full power, ASCII `0` idle, and every other byte is ignored, so `1\n` works too. The sender has to keep repeating its command: after 500 ms without one the motors go idle and the function returns 0. Bytes are received by the USART3 interrupt, so none are lost while a status line is being printed.
+- Motor_ControlInput accepts the caller's signal directly. 1 means both motors at 75% PWM, 2 full power, 3 bearing left (left motor 25%, right 75%), 4 bearing right; 0 or any other value means idle. It does not read the button, parse UART data, or apply a timeout.
+- Motor_ControlSerial takes command bytes from the ST-LINK virtual COM port (USART3, 115200 8N1) and passes them to Motor_ControlInput. ASCII `1` means forward at 75% PWM, ASCII `2` forward at full power, ASCII `3` bearing left (left wheel 25%, right 75%), ASCII `4` bearing right, ASCII `0` idle, and every other byte is ignored, so `1\n` works too. The sender has to keep repeating its command: after 500 ms without one the motors go idle and the function returns 0. Bytes are received by the USART3 interrupt, so none are lost while a status line is being printed.
 
 The main loop lets the PC drive while it is sending and falls back to the button otherwise:
 
@@ -43,7 +43,10 @@ Session checklist (one-time: `pip install pyserial python-osc numpy`; the board 
 3. Phone and laptop on the same Wi-Fi. In MuseLog: headband connected, OSC Streaming Settings with Target IP = the laptop (printed when the bridge starts; 10.0.0.185 on the home network), port 5000, Full-rate raw EEG on, then Start Streaming. Keep MuseLog in the foreground with the phone screen on: on 2026-10-04 the stream stopped after a few minutes with the phone idle.
 4. Double-click `Muse Car.cmd` (or run `python tools/muse_drive.py`). Click into that window; every key below goes there. It waits for the headband signal and for the board, and says so on its bottom line (`NO DATA FROM MUSELOG`, `CAR UNPLUGGED`, `car cmd=0`).
 5. Press SPACE when it asks. Calibration is spoken as well as printed: eyes closed and relaxed until the beep, then eyes open counting down from 300 in sevens until the second beep. It then reports how well the two states separate.
-6. Press SPACE to let the car move. Focus drives it forward, relaxing with eyes closed stops it. SPACE pauses, R recalibrates, Q quits. If the board is unplugged mid-run the bridge reconnects by itself and pauses the car until SPACE.
+6. Steering calibration follows when the headband's accelerometer is available (Bluetooth mode): head straight for 3 s, tilt left and hold for 4 s, tilt right and hold for 4 s. `--no-steer` skips it.
+7. Press SPACE to let the car move. Focus drives it forward, relaxing with eyes closed stops it, and tilting your head left or right while it moves makes it bear that way (the inner wheel drops to 25%). SPACE pauses, R recalibrates, Q quits. If the board is unplugged mid-run the bridge reconnects by itself and pauses the car until SPACE.
+
+Steering uses gravity: the tilt is the projection of the accelerometer vector on the left-right axis found in the calibration, scaled so the calibrated tilts are +1 and -1; the car bears past 0.5 and straightens under 0.3. Tilting the head also moves the electrodes and tenses the neck, which can nudge the arousal index.
 
 Options: `--serial COMx` or `--serial none` (no car), `--reuse` (skip calibration on a restart), `--quiet` (no speech), `--power full` (100% PWM instead of 75%), `--log none` (every tick is otherwise logged to build/muse_run_<time>.csv, which is how a run can be looked at afterwards).
 

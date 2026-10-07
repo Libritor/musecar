@@ -15,9 +15,15 @@ then focused) keeps whichever of the two separates the wearer's states
 better and puts it on a 0..1 scale. The car goes forward above --go and
 stops below --stop.
 
-The script sends '1' or '0' ten times a second. It sends '0' while paused,
-when the headband loses contact and when the stream stops, and the firmware
-stops by itself if the commands stop arriving.
+Steering: with the headband's accelerometer (Bluetooth mode, or Mind
+Monitor's /muse/acc), a head tilt to the left or right makes the car bear
+that way while it is moving. Two short extra calibration steps (tilt left,
+tilt right) set the axis; --no-steer skips them.
+
+The script sends a command byte ten times a second: '1' or '2' forward,
+'3' or '4' bearing left or right, '0' idle. It sends '0' while paused, when
+the headband loses contact and when the stream stops, and the firmware stops
+by itself if the commands stop arriving.
 
 Keys: SPACE begin calibration, then pause/resume the car; R recalibrate;
 Q quit. Prompts are spoken as well as printed (--quiet turns that off), and
@@ -42,6 +48,7 @@ import re
 import shutil
 import socket
 import statistics
+import struct
 import subprocess
 import sys
 import threading
@@ -86,6 +93,7 @@ class MuseStream(threading.Thread):
         self.raw = collections.deque(maxlen=1024)  # (time, microvolts)
         self.raw_rate = None  # 256, or 64 when MuseLog sends every 4th sample
         self.quality = None   # per-electrode signal spread (uV) over Bluetooth
+        self.accel = None     # (time, gravity vector in g), lightly smoothed
         self.first_packet = self.last_packet = None
 
     def run(self):
@@ -121,6 +129,26 @@ class MuseStream(threading.Thread):
             self.raw.append((now, values[:4]))
         elif address == "/person1/eeg":
             self.legacy = (now, values[:4])
+        elif address == "/muse/acc":  # Mind Monitor's accelerometer message
+            self.set_accel(values[:3], now)
+
+    def set_accel(self, xyz, now):
+        """Keep the gravity vector, smoothed over about 0.3 s. Call with
+        the lock held."""
+        xyz = np.array(xyz[:3], float)
+        if self.accel and now - self.accel[0] < 1.0:
+            xyz = self.accel[1] + 0.3 * (xyz - self.accel[1])
+        self.accel = (now, xyz)
+
+    def tilt(self, now, calibration):
+        """Head tilt from gravity: +1 at the calibrated left tilt, -1 at
+        the right one, 0 upright; None without motion data or steering."""
+        with self.lock:
+            accel = self.accel
+        if not calibration or not accel or now - accel[0] > 1.0:
+            return None
+        return float(np.dot(accel[1] - calibration["center"],
+                            calibration["axis"]) / calibration["half"])
 
     def horseshoe(self, now):
         """Contact per electrode, or None if the app is not reporting it."""
@@ -200,8 +228,10 @@ MUSE_EEG = ("273e0003-4c4d-454d-96be-f03bac821358",   # TP9
             "273e0004-4c4d-454d-96be-f03bac821358",   # AF7
             "273e0005-4c4d-454d-96be-f03bac821358",   # AF8
             "273e0006-4c4d-454d-96be-f03bac821358")   # TP10
+MUSE_ACCEL = "273e000a-4c4d-454d-96be-f03bac821358"
 MUSE_PRESETS = ("p21", "p20", "p1031")  # tried in turn until EEG arrives
 MUSE_SCALE = 1650.0 / 4095.0            # 12-bit count -> libmuse microvolts
+MUSE_ACCEL_SCALE = 0.0000610352         # int16 -> g
 
 
 class MuseBluetooth(threading.Thread):
@@ -286,6 +316,18 @@ class MuseBluetooth(threading.Thread):
         for electrode, uuid in enumerate(MUSE_EEG):
             await link.start_notify(uuid, handler(electrode))
 
+        def on_accel(_sender, data):
+            # 16-bit counter, then three samples of x, y, z as int16
+            values = struct.unpack(">H9h", bytes(data[:20]))[1:]
+            xyz = [sum(values[k::3]) / 3.0 * MUSE_ACCEL_SCALE for k in range(3)]
+            with self.stream.lock:
+                self.stream.set_accel(xyz, time.monotonic())
+
+        try:
+            await link.start_notify(MUSE_ACCEL, on_accel)
+        except Exception:  # no accelerometer characteristic: no steering
+            pass
+
         def command(text):
             body = text.encode("ascii") + b"\n"
             return link.write_gatt_char(MUSE_CONTROL, bytes([len(body)]) + body,
@@ -347,6 +389,7 @@ class Car:
                       "board's ST-LINK USB appears.")
         self.retry_at = 0.0
         self.forward = b"1"  # b"2" for full power
+        self.last_sent = b"0"
         self.text = b""
         self.report = None  # (time, "SERIAL" or "BUTTON", cmd) from the board
 
@@ -361,18 +404,22 @@ class Car:
                                           write_timeout=0.5)
         self.device = device
 
-    def send(self, forward, now):
-        """Send one command and take in the status lines the board printed.
-        False while the cable is out; the port is retried once a second."""
+    def send(self, command, now):
+        """Send one command byte (True/False mean forward/idle) and take in
+        the status lines the board printed. False while the cable is out;
+        the port is retried once a second."""
         if not self.port:
             return True
+        if not isinstance(command, bytes):
+            command = self.forward if command else b"0"
+        self.last_sent = command
         try:
             if not self.link:
                 if now < self.retry_at:
                     return False
                 self.retry_at = now + 1.0
                 self.open()
-            self.link.write(self.forward if forward else b"0")
+            self.link.write(command)
             self.text += self.link.read(4096)
         except serial.SerialException:
             if self.link:
@@ -398,6 +445,8 @@ class Car:
             return "car silent"
         if self.report[1] == "BUTTON":
             return "board ignores serial: flash build/serial/Car_Demo.hex"
+        if self.last_sent in (b"3", b"4") and self.report[2] < 3:
+            return "board firmware has no steering: flash build/serial/Car_Demo.hex"
         return f"car cmd={self.report[2]}"
 
     def close(self):
@@ -515,7 +564,7 @@ def record(phase, stream, now, ratios, *driving):
                   for name in INDEXES]
         run_log.writerow([f"{time.time():.2f}", phase, *values,
                           *(stream.horseshoe(now) or [""] * 4),
-                          *(driving or [""] * 4),
+                          *(driving or [""] * 6),
                           *(stream.quality or [""] * 4)])
 
 
@@ -650,12 +699,70 @@ def calibrate(stream, source, car, args):
             "the electrode contact, wet the sensors and move hair away from "
             "the ones behind the ears, then press space to try again.")
         return {}
+    result = dict(chosen, source=source, tilt=None)
+    if not args.no_steer:
+        tilt = calibrate_tilt(stream, car)
+        if tilt == "quit":
+            return None
+        result["tilt"] = tilt
     verdict = ("Calibration done, but the two states overlap a lot; press R "
                "to try again." if chosen["separation"] < 1.5
                else "Calibration done.")
     say(verdict + (" The car is live." if args.armed
                    else " Press space to let the car move."))
-    return dict(chosen, source=source)
+    return result
+
+
+def hold_tilt(stream, car, seconds, label):
+    """Gravity vectors while the head is held in one pose (the first 1.5 s
+    are for getting there); None if Q was pressed."""
+    vectors = []
+    end = time.monotonic() + seconds
+    while (now := time.monotonic()) < end:
+        if key() == "q":
+            return None
+        car.send(False, now)
+        with stream.lock:
+            accel = stream.accel
+        if accel and now - accel[0] < 1.0 and end - now <= seconds - 1.5:
+            vectors.append(accel[1])
+        show(f"{label}: {end - now:3.0f} s left   {car.status(now)}")
+        time.sleep(TICK_S)
+    return vectors
+
+
+def calibrate_tilt(stream, car):
+    """Gravity with the head upright, tilted left and tilted right, as the
+    steering calibration; None (steering off) without motion data or a
+    clear difference; "quit" if Q was pressed."""
+    with stream.lock:
+        accel = stream.accel
+    if not accel or time.monotonic() - accel[0] > 1.0:
+        note("No motion data from the headband: steering off.")
+        return None
+    poses = {}
+    for pose, seconds in (("upright", 3.0), ("left", 4.0), ("right", 4.0)):
+        say("Now the steering. Keep your head straight." if pose == "upright"
+            else f"Tilt your head to the {pose} and hold it.")
+        held = hold_tilt(stream, car, seconds, f"tilt {pose}")
+        if held is None:
+            return "quit"
+        beep()
+        if not held:
+            say("The motion data stopped: steering off.")
+            return None
+        poses[pose] = np.median(np.array(held), axis=0)
+    axis = poses["left"] - poses["right"]
+    span = float(np.linalg.norm(axis))
+    if span < 0.25:  # g; a real head tilt moves gravity by more than this
+        say("The left and right tilts looked the same: steering off.")
+        return None
+    axis /= span
+    half = (abs(np.dot(poses["left"] - poses["upright"], axis)) +
+            abs(np.dot(poses["right"] - poses["upright"], axis))) / 2
+    say("Steering calibrated. Head straight.")
+    return {"center": poses["upright"].tolist(), "axis": axis.tolist(),
+            "half": float(max(half, span / 4))}
 
 
 def choose_index(relaxed, focused, wanted):
@@ -684,6 +791,7 @@ def drive(stream, calibration, car, args):
     """Run the car from the index; returns the key that ended it (r or q)."""
     armed = args.armed
     forward = False
+    steer = None  # "left", "right" or None, from the head tilt
     smooth = None
     last_valid = 0.0
     weight = 1.0 if args.smooth <= 0 else 1 - math.exp(-TICK_S / args.smooth)
@@ -729,12 +837,25 @@ def drive(stream, calibration, car, args):
             meter = (f"arousal {level:5.2f} |{'#' * filled}{'.' * (20 - filled)}| "
                      f"{'FORWARD' if forward else 'stop   '}")
         moving = armed and forward
-        if not car.send(moving, now):
+        tilt = stream.tilt(now, calibration.get("tilt"))
+        # Steer past half the calibrated tilt, straighten under 0.3 of it.
+        if tilt is None or abs(tilt) < 0.3:
+            steer = None
+        elif tilt >= 0.5:
+            steer = "left"
+        elif tilt <= -0.5:
+            steer = "right"
+        command = (b"3" if steer == "left" else b"4" if steer == "right"
+                   else car.forward) if moving else b"0"
+        if not car.send(command, now):
             # Cable out: the car must not start by itself when it returns.
             armed = args.armed
         record("drive", stream, now, ratios, round(level, 3) if ratios else "",
-               int(armed), int(moving), car.status(now))
-        show(f"[{'ARMED ' if armed else 'PAUSED'}] {meter}  "
+               int(armed), int(moving), car.status(now),
+               "" if tilt is None else round(tilt, 2), steer or "")
+        wheel = ("" if tilt is None else
+                 {"left": "<< LEFT ", "right": " RIGHT >>"}.get(steer, " straight"))
+        show(f"[{'ARMED ' if armed else 'PAUSED'}] {meter} {wheel}  "
              f"{contact_text(stream, now)}  {car.status(now)}")
         tick += TICK_S
         time.sleep(max(0.0, tick - time.monotonic()))
@@ -779,6 +900,8 @@ def main():
                              "instead of MuseLog (optionally by name, e.g. "
                              "Muse-D31E); it must not be connected to the "
                              "phone")
+    parser.add_argument("--no-steer", action="store_true",
+                        help="no head-tilt steering (skips its calibration)")
     parser.add_argument("--power", choices=("normal", "full"), default="normal",
                         help="forward at 75%% PWM (normal) or full power")
     parser.add_argument("--simulate", action="store_true",
@@ -800,7 +923,7 @@ def main():
         path.parent.mkdir(parents=True, exist_ok=True)
         run_log = csv.writer(open(path, "w", newline="", buffering=1))
         run_log.writerow(["time", "phase", *INDEXES, *CHANNELS, "level",
-                          "armed", "sent", "car",
+                          "armed", "sent", "car", "tilt", "steer",
                           *(f"spread_{name}" for name in CHANNELS)])
         print(f"Logging every tick to {path}")
     if not args.stop < args.go:

@@ -301,7 +301,8 @@ static void MX_GPIO_Init(void)
 void Motor_ControlInput(uint8_t forward_signal)
 {
   /* Apply the caller's signal directly, without button debounce. */
-  Motor_SetCommand((forward_signal == 1U) ? 1U : 0U);
+  Motor_SetCommand((forward_signal == 1U || forward_signal == 2U) ?
+                   forward_signal : 0U);
 }
 
 /* The existing bridge wiring uses two direction inputs per motor. */
@@ -309,10 +310,15 @@ static void Motor_SetCommand(uint8_t command)
 {
   uint32_t pulse = 0U;
 
-  if (command == 1U)
+  if (command == 1U || command == 2U)
   {
-    /* PWM duty = CCR / (ARR + 1), not CCR / ARR. */
-    pulse = ((__HAL_TIM_GET_AUTORELOAD(&htim2) + 1U) * 3U) / 4U;
+    /* PWM duty = CCR / (ARR + 1), not CCR / ARR. A compare value above
+       the period holds the output high: 2 means full power. */
+    pulse = __HAL_TIM_GET_AUTORELOAD(&htim2) + 1U;
+    if (command == 1U)
+    {
+      pulse = (pulse * 3U) / 4U;
+    }
     /* Left motor reversed: IN1=0, IN2=1; right retains IN3=1, IN4=0. */
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0 | GPIO_PIN_3, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1 | GPIO_PIN_2, GPIO_PIN_SET);
@@ -320,12 +326,12 @@ static void Motor_SetCommand(uint8_t command)
 
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, pulse);
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, pulse);
-  if (command != 1U)
+  if (pulse == 0U)
   {
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0 | GPIO_PIN_1 |
                             GPIO_PIN_2 | GPIO_PIN_3, GPIO_PIN_RESET);
   }
-  motor_command = (command == 1U) ? 1U : 0U;
+  motor_command = (pulse == 0U) ? 0U : command;
 }
 
 void Motor_ControlButton(void)
@@ -384,7 +390,8 @@ static void Motor_ReportRegisters(void)
   }
 }
 
-/* Keeps the newest command byte: ASCII '1' = forward, '0' = idle. */
+/* Keeps the newest command byte: ASCII '1' = forward at 75% PWM,
+   '2' = forward at full power, '0' = idle. */
 void USART3_IRQHandler(void)
 {
   /* Reading SR then DR clears RXNE and any overrun, noise or framing flag. */
@@ -393,7 +400,7 @@ void USART3_IRQHandler(void)
 
   if ((status & USART_SR_RXNE) != 0U &&
       (status & (USART_SR_FE | USART_SR_NE)) == 0U &&
-      (byte == (uint8_t)'0' || byte == (uint8_t)'1'))
+      byte >= (uint8_t)'0' && byte <= (uint8_t)'2')
   {
     serial_signal = (uint8_t)(byte - (uint8_t)'0');
     serial_tick = HAL_GetTick();

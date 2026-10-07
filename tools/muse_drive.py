@@ -208,6 +208,7 @@ class Car:
                 print("Car: not plugged in yet; it is picked up when the "
                       "board's ST-LINK USB appears.")
         self.retry_at = 0.0
+        self.forward = b"1"  # b"2" for full power
         self.text = b""
         self.report = None  # (time, "SERIAL" or "BUTTON", cmd) from the board
 
@@ -233,7 +234,7 @@ class Car:
                     return False
                 self.retry_at = now + 1.0
                 self.open()
-            self.link.write(b"1" if forward else b"0")
+            self.link.write(self.forward if forward else b"0")
             self.text += self.link.read(4096)
         except serial.SerialException:
             if self.link:
@@ -258,7 +259,7 @@ class Car:
         if not self.report or now - self.report[0] > 3.0:
             return "car silent"
         if self.report[1] == "BUTTON":
-            return "board ignores serial: flash build/serial/Car_Demo.bin"
+            return "board ignores serial: flash build/serial/Car_Demo.hex"
         return f"car cmd={self.report[2]}"
 
     def close(self):
@@ -621,6 +622,8 @@ def main():
                              "build/muse_run_<time>.csv, 'none' for no log")
     parser.add_argument("--quiet", action="store_true",
                         help="do not speak the prompts")
+    parser.add_argument("--power", choices=("normal", "full"), default="normal",
+                        help="forward at 75%% PWM (normal) or full power")
     parser.add_argument("--simulate", action="store_true",
                         help="no headband: made-up data calibrates, then "
                              "drives the car forward for 10 s and stops it "
@@ -654,6 +657,7 @@ def main():
         ctypes.windll.kernel32.SetThreadExecutionState(0x80000003)
 
     car = Car(None if args.serial == "none" else args.serial)
+    car.forward = b"2" if args.power == "full" else b"1"
     stream = MuseStream(args.osc_port)
     stream.start()
     if args.simulate:

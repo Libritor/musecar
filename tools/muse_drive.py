@@ -229,7 +229,8 @@ MUSE_EEG = ("273e0003-4c4d-454d-96be-f03bac821358",   # TP9
             "273e0005-4c4d-454d-96be-f03bac821358",   # AF8
             "273e0006-4c4d-454d-96be-f03bac821358")   # TP10
 MUSE_ACCEL = "273e000a-4c4d-454d-96be-f03bac821358"
-MUSE_PRESETS = ("p21", "p20", "p1031")  # tried in turn until EEG arrives
+# Tried in turn until EEG and the accelerometer both arrive.
+MUSE_PRESETS = ("p21", "p20", "p50", "p51", "p1034", "p1035", "p1031")
 MUSE_SCALE = 1650.0 / 4095.0            # 12-bit count -> libmuse microvolts
 MUSE_ACCEL_SCALE = 0.0000610352         # int16 -> g
 
@@ -337,18 +338,32 @@ class MuseBluetooth(threading.Thread):
             return link.write_gatt_char(MUSE_CONTROL, bytes([len(body)]) + body,
                                         response=False)
 
+        # Presets differ between headbands: keep the first one that gives
+        # EEG and the accelerometer, else the first that gives EEG.
+        eeg_only = None
         for preset in MUSE_PRESETS:
+            got.clear()
+            packets_before = self.accel_packets
             await command("h")
             await command(preset)
             await command("d")
             try:
                 await asyncio.wait_for(got.wait(), timeout=5.0)
-                break
             except asyncio.TimeoutError:
                 continue
+            await asyncio.sleep(2.0)
+            if self.accel_packets > packets_before:
+                break
+            eeg_only = eeg_only or preset
         else:
-            note("The headband connected but sent no EEG with any preset.")
-            return
+            if eeg_only is None:
+                note("The headband connected but sent no EEG with any preset.")
+                return
+            preset = eeg_only
+            await command("h")
+            await command(preset)
+            await command("d")
+            note(f"No accelerometer with any preset; steering off.")
         self.connected = link.address
         note(f"Headband connected over Bluetooth (preset {preset}).")
         seconds = 0

@@ -296,15 +296,27 @@ def local_ips():
     return ", ".join(ips) or "unknown"
 
 
+last_key_time = 0.0
+
+
 def key():
-    """One pending keypress, lower case, or '' (Windows console only)."""
-    if msvcrt and msvcrt.kbhit():
-        pressed = msvcrt.getwch()
-        if pressed in "\x00\xe0":  # arrow or function key: drop its code too
-            msvcrt.getwch()
-            return ""
-        return pressed.lower()
-    return ""
+    """One pending keypress, lower case, or '' (Windows console only). A
+    held key auto-repeats, so everything else waiting is dropped and keys
+    within 0.7 s of the last accepted one are ignored."""
+    global last_key_time
+    if not (msvcrt and msvcrt.kbhit()):
+        return ""
+    pressed = msvcrt.getwch()
+    if pressed in "\x00\xe0":  # arrow or function key: drop its code too
+        msvcrt.getwch()
+        pressed = ""
+    while msvcrt.kbhit():
+        msvcrt.getwch()
+    now = time.monotonic()
+    if now - last_key_time < 0.7:
+        return ""
+    last_key_time = now
+    return pressed.lower()
 
 
 def beep():

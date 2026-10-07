@@ -1,6 +1,12 @@
 # Flash attempt: 2026-10-04
 
-## Latest: serial control with button fallback flashed
+## Latest: full-power command added and flashed (2026-10-07)
+
+- Flashed build/serial/Car_Demo.hex with ASCII `2` = forward at full power (CCR3=CCR4=30000, above ARR, so the outputs stay high). `1` and `0` are unchanged. HEX SHA256: 0a2f3fefca012acefd5a928062e6bfb1bccc6767b149e83f2d2499750f7b9d52. Copied to D:, consumed, no FAIL.TXT.
+- tools/motor_test.py on COM6: 4 s of `1` gave `SERIAL sig=1 cmd=1 ccr3=22500 ccr4=22500`, 4 s of `2` gave `SERIAL sig=2 cmd=2 ccr3=30000 ccr4=30000`, `0` gave idle. Earlier the same day, 5 s of `1` showed the full register report (ccr 22500, odr=6, PB10/PB11 AF1) and the board did not reset.
+- The user reported that the wheels did not turn during the simulated-headband run while the board reported cmd=1 for 7 s. Register state is right, so the remaining suspects are after the Nucleo: L298N power, ENA/ENB jumpers, wiring, and the motor supply voltage (the earlier 1.5 V / 2.4 V motor-terminal readings).
+
+## Earlier: serial control with button fallback flashed
 
 - Flashed build/serial/Car_Demo.hex (Motor_ControlSerial with USART3 receive interrupt, 500 ms timeout, button fallback). HEX SHA256: 0a00f64482df4d159f91ce798e1520a36eea8ef72eea4f5fff6a1325dbbf08da.
 - Different PC from the earlier entries: the same ST-LINK (serial 0670FF485051727187182229) is COM6 and drive D: (NOD_F446ZE) here. Copied the HEX to D:; it was consumed, no FAIL.TXT.

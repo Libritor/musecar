@@ -13,8 +13,8 @@ uint8_t Motor_ControlSerial(void);
 ```
 
 - Motor_ControlButton reads the blue USER button on PC13 with 20 ms debounce. Pressed means both motors at 75% PWM; released means idle.
-- Motor_ControlInput accepts the caller's binary signal directly. Exactly 1 means both motors at 75% PWM; 0 or any other value means idle. It does not read the button, parse UART data, or apply a timeout.
-- Motor_ControlSerial takes command bytes from the ST-LINK virtual COM port (USART3, 115200 8N1) and passes them to Motor_ControlInput. ASCII `1` means forward, ASCII `0` means idle, and every other byte is ignored, so `1\n` works too. The sender has to keep repeating its command: after 500 ms without one the motors go idle and the function returns 0. Bytes are received by the USART3 interrupt, so none are lost while a status line is being printed.
+- Motor_ControlInput accepts the caller's signal directly. 1 means both motors at 75% PWM, 2 means full power; 0 or any other value means idle. It does not read the button, parse UART data, or apply a timeout.
+- Motor_ControlSerial takes command bytes from the ST-LINK virtual COM port (USART3, 115200 8N1) and passes them to Motor_ControlInput. ASCII `1` means forward at 75% PWM, ASCII `2` forward at full power, ASCII `0` idle, and every other byte is ignored, so `1\n` works too. The sender has to keep repeating its command: after 500 ms without one the motors go idle and the function returns 0. Bytes are received by the USART3 interrupt, so none are lost while a status line is being printed.
 
 The main loop lets the PC drive while it is sending and falls back to the button otherwise:
 
@@ -55,7 +55,7 @@ The script sends `0` while paused, when no electrode has contact and when the st
 
 Jaw, forehead and neck muscle activity raises beta and gamma far more than attention does, so tensing up also drives the car. Blinks lower the MuseLog index but leave beta / alpha about unchanged.
 
-To test the car without a headband, double-click `Muse Car (simulated).cmd` (`python tools/muse_drive.py --simulate`). Made-up band powers run the mock calibration, then the car moves forward for 10 s and stops for 10 s, in turn, until Q. `tools/fake_muse.py` is the same generator as a separate program, for feeding a bridge started with `--armed`.
+To test the car without a headband, double-click `Muse Car (simulated).cmd` (`python tools/muse_drive.py --simulate`). Made-up band powers run the mock calibration, then the car moves forward for 10 s and stops for 10 s, in turn, until Q. `tools/fake_muse.py` is the same generator as a separate program, for feeding a bridge started with `--armed`. `python tools/motor_test.py` spins the motors directly, 4 s at 75% then 4 s at full power, printing the board's replies; `muse_drive.py --power full` drives at full power instead of 75%.
 
 ## Wiring and behavior
 
@@ -89,7 +89,7 @@ The current source compiled and linked with Arm GNU GCC 14.2.Rel1 and -Wall -Wer
 
 The serial firmware is on the board (flash_report.md). There it reported `BUTTON` lines with nothing sent, `SERIAL sig=0 cmd=0` while `0` was being sent, and `BUTTON` lines again after sending stopped. The forward command has not been sent to the real board yet. What has been checked without the board:
 
-- `python tools/emulate_firmware.py --gcc-bin "<Arm GNU Toolchain>/bin"` (needs `pip install unicorn`) runs build/serial/Car_Demo.bin on an emulated Cortex-M4 with stand-in peripherals. All 23 checks pass: idle at boot, button press and release as before, `1` and `0` commands, the 500 ms timeout, other bytes and framing errors ignored, the button ignored while the PC is sending and working again afterwards.
+- `python tools/emulate_firmware.py --gcc-bin "<Arm GNU Toolchain>/bin"` (needs `pip install unicorn`) runs build/serial/Car_Demo.bin on an emulated Cortex-M4 with stand-in peripherals. All 27 checks pass: idle at boot, button press and release as before, `1`, `2` and `0` commands, the 500 ms timeout, other bytes and framing errors ignored, the button ignored while the PC is sending and working again afterwards.
 - Rebuilding the earlier button-only source with the same compiler reproduces build/button/Car_Demo.hex exactly (SHA256 1725930298df068e...), so this toolchain matches the one behind flash_report.md.
 - muse_drive.py was run against fake_muse.py and a stand-in for the board's serial protocol: calibration, forward within about 1 s of the focused state, stop within about 1 s of the relaxed state, idle when the stream ended, and reconnection after the stand-in board was "unplugged" mid-run.
 - The real console flow was driven with injected keystrokes (2026-10-06): `Muse Car.cmd` opens, SPACE starts the calibration, SPACE lets the car move, the status line follows the simulated states, SPACE pauses, Q quits.

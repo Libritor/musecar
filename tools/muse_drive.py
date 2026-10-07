@@ -694,7 +694,7 @@ def calibrate(stream, source, car, args):
         return {}
     chosen = choose_index(relaxed, focused, args.index)
     if not chosen:
-        say("Calibration failed: focused did not come out above relaxed. "
+        say("Calibration failed: relaxed and focused came out identical. "
             "Check the electrode contact, then press space to try again.")
         return {}
     result = dict(chosen, source=source, tilt=None)
@@ -704,7 +704,7 @@ def calibrate(stream, source, car, args):
             return None
         result["tilt"] = tilt
     verdict = ("Calibration done. The two states overlap a lot; R tries "
-               "again, or drive anyway." if chosen["separation"] < 1.5
+               "again, or drive anyway." if abs(chosen["separation"]) < 1.5
                else "Calibration done.")
     say(verdict + (" The car is live." if args.armed
                    else " Press space to let the car move."))
@@ -772,15 +772,18 @@ def choose_index(relaxed, focused, wanted):
         spread = 1.4826 * max(
             statistics.median(abs(v[name] - low) for v in relaxed),
             statistics.median(abs(v[name] - high) for v in focused))
+        # Signed: negative means the index is higher relaxed than focused.
+        # Either way round works, the mapping follows the measured levels.
         separation = (high - low) / max(spread, 1e-9)
         note(f"  {name:10s} relaxed {10 ** low:.2f}  focused {10 ** high:.2f}"
              f"  separation {separation:.1f}")
-        if best is None or separation > best[0]:
+        if best is None or abs(separation) > abs(best[0]):
             best = (separation, name, low, high)
     separation, name, low, high = best
-    if separation <= 0:
+    if abs(separation) < 1e-6:
         return {}
-    note(f"Using {name}.")
+    note(f"Using {name}" + (" (higher when relaxed)." if separation < 0
+                            else "."))
     return {"index": name, "relaxed": low, "focused": high,
             "separation": round(separation, 2)}
 
@@ -794,9 +797,12 @@ def drive(stream, calibration, car, args):
     last_valid = 0.0
     weight = 1.0 if args.smooth <= 0 else 1 - math.exp(-TICK_S / args.smooth)
     low = calibration["relaxed"]
-    # Never scale by less than a factor 1.4 in the ratio, or noise becomes
-    # a wild swing of the level.
-    high = max(calibration["focused"], low + 0.15)
+    # The gap may run either way. Never scale by less than a factor 1.4 in
+    # the ratio, or noise becomes a wild swing of the level.
+    gap = calibration["focused"] - low
+    if abs(gap) < 0.15:
+        gap = math.copysign(0.15, gap or 1.0)
+    high = low + gap
     note("SPACE = start/pause the car   R = recalibrate   Q = quit")
     meter = ""
     tick = started = time.monotonic()

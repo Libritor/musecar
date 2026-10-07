@@ -265,23 +265,22 @@ class MuseBluetooth(threading.Thread):
                 continue
             device = muses[0][1]
             gone = asyncio.Event()
+            if not self.unpaired:
+                # Windows re-pairs the headband between runs, and a paired
+                # headband drops every connection within a second.
+                self.unpaired = True
+                try:
+                    await BleakClient(device).unpair()
+                except Exception:
+                    pass
             try:
                 async with BleakClient(
                         device, disconnected_callback=lambda _: gone.set()) as link:
                     await self.stream_from(link, gone)
                     note(f"{device.name}: connection lost.")
             except Exception as error:  # bleak raises many kinds; retry
-                note(f"{device.name}: {type(error).__name__} {error}")
-                if not self.unpaired:
-                    # A stale Windows pairing of the headband makes every
-                    # connection drop within a second ("Unreachable").
-                    self.unpaired = True
-                    try:
-                        await BleakClient(device).unpair()
-                        note("Removed Windows' old pairing of the headband; "
-                             "retrying.")
-                    except Exception:
-                        pass
+                note(f"{device.name}: {type(error).__name__} {error}; "
+                     "retrying.")
             self.connected = None
             await asyncio.sleep(1.0)
 

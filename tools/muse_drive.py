@@ -85,6 +85,7 @@ class MuseStream(threading.Thread):
         self.contact = None   # (time, horseshoe per electrode: 1 good, 4 none)
         self.raw = collections.deque(maxlen=1024)  # (time, microvolts)
         self.raw_rate = None  # 256, or 64 when MuseLog sends every 4th sample
+        self.quality = None   # per-electrode signal spread (uV) over Bluetooth
         self.first_packet = self.last_packet = None
 
     def run(self):
@@ -326,6 +327,7 @@ class MuseBluetooth(threading.Thread):
         grade = np.where(railed | (spread > 150), 4, np.where(spread > 50, 2, 1))
         with self.stream.lock:
             self.stream.contact = (time.monotonic(), [int(g) for g in grade])
+            self.stream.quality = [round(float(s), 1) for s in spread]
 
 
 class Car:
@@ -513,7 +515,8 @@ def record(phase, stream, now, ratios, *driving):
                   for name in INDEXES]
         run_log.writerow([f"{time.time():.2f}", phase, *values,
                           *(stream.horseshoe(now) or [""] * 4),
-                          *(driving or [""] * 4)])
+                          *(driving or [""] * 4),
+                          *(stream.quality or [""] * 4)])
 
 
 def contact_text(stream, now):
@@ -577,12 +580,20 @@ def wait_for_space(stream, car):
     if not msvcrt:
         return True
     say("Press space to begin the calibration.")
+    reminded = time.monotonic()
     while (pressed := key()) != " ":
         if pressed == "q":
             return False
         now = time.monotonic()
         car.send(False, now)
         show(f"{contact_text(stream, now)}  {car.status(now)}")
+        contact = stream.horseshoe(now)
+        if contact and now - reminded > 15:
+            reminded = now
+            bad = [name for name, grade in zip(CHANNELS, contact) if grade > 2]
+            if bad:
+                say(f"No contact at {', '.join(bad)}. Adjust the headband "
+                    "before you start.")
         time.sleep(TICK_S)
     return True
 
@@ -634,8 +645,10 @@ def calibrate(stream, source, car, args):
             "electrode contact.")
         return {}
     chosen = choose_index(relaxed, focused, args.index)
-    if not chosen:
-        say("Calibration failed: focused did not come out above relaxed.")
+    if not chosen or chosen["separation"] < 1.0:
+        say("Calibration failed: relaxed and focused did not separate. Fix "
+            "the electrode contact, wet the sensors and move hair away from "
+            "the ones behind the ears, then press space to try again.")
         return {}
     verdict = ("Calibration done, but the two states overlap a lot; press R "
                "to try again." if chosen["separation"] < 1.5
@@ -674,7 +687,10 @@ def drive(stream, calibration, car, args):
     smooth = None
     last_valid = 0.0
     weight = 1.0 if args.smooth <= 0 else 1 - math.exp(-TICK_S / args.smooth)
-    low, high = calibration["relaxed"], calibration["focused"]
+    low = calibration["relaxed"]
+    # Never scale by less than a factor 1.4 in the ratio, or noise becomes
+    # a wild swing of the level.
+    high = max(calibration["focused"], low + 0.15)
     note("SPACE = start/pause the car   R = recalibrate   Q = quit")
     meter = ""
     tick = started = time.monotonic()
@@ -784,7 +800,8 @@ def main():
         path.parent.mkdir(parents=True, exist_ok=True)
         run_log = csv.writer(open(path, "w", newline="", buffering=1))
         run_log.writerow(["time", "phase", *INDEXES, *CHANNELS, "level",
-                          "armed", "sent", "car"])
+                          "armed", "sent", "car",
+                          *(f"spread_{name}" for name in CHANNELS)])
         print(f"Logging every tick to {path}")
     if not args.stop < args.go:
         parser.error("--stop must be below --go")

@@ -26,6 +26,7 @@ every tick is logged to build/muse_run_<time>.csv.
     python tools/muse_drive.py                 # uses the ST-LINK COM port
     python tools/muse_drive.py --serial COM7
     python tools/muse_drive.py --serial none   # no car: watch the index only
+    python tools/muse_drive.py --simulate      # no headband: bench-test the car
 """
 
 import argparse
@@ -45,7 +46,7 @@ import threading
 import time
 
 import numpy as np
-from pythonosc import osc_bundle, osc_message
+from pythonosc import osc_bundle, osc_message, udp_client
 import serial
 from serial.tools import list_ports
 
@@ -267,6 +268,25 @@ class Car:
             self.link = None
 
 
+simulation = {"state": "relaxed"}  # what --simulate sends: relaxed or focused
+
+
+def simulate_headband(port):
+    """Send made-up MuseLog band powers to our own port, following
+    simulation["state"], so the whole chain can run without a headband."""
+    bels = {"delta": (0.9, 0.9), "theta": (0.5, 0.4), "alpha": (1.0, 0.3),
+            "beta": (0.2, 0.7), "gamma": (-0.3, 0.1)}  # (relaxed, focused)
+    client = udp_client.SimpleUDPClient("127.0.0.1", port)
+    rng = np.random.default_rng()
+    while True:
+        focused = simulation["state"] == "focused"
+        for band, levels in bels.items():
+            client.send_message(f"/muse/elements/{band}_absolute",
+                                list(levels[focused] + rng.normal(0, 0.05, 4)))
+        client.send_message("/muse/elements/horseshoe", [1, 1, 1, 1])
+        time.sleep(TICK_S)
+
+
 def local_ips():
     try:
         found = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
@@ -421,6 +441,7 @@ def wait_for_space(stream, car):
 def collect(stream, source, seconds, car, label):
     """The index over one calibration phase, with the car held idle."""
     values = []
+    simulation["state"] = "focused" if label == "focus" else "relaxed"
     end = time.monotonic() + seconds
     while (now := time.monotonic()) < end:
         if key() == "q":
@@ -454,6 +475,7 @@ def calibrate(stream, source, car, args):
     beep()
     say("\n2 of 2. Open your eyes and focus. Count down from 300 in sevens.")
     focused = collect(stream, source, seconds, car, "focus")
+    simulation["state"] = "relaxed"  # so a simulated run starts at rest
     if focused is None:
         return None
     beep()
@@ -506,9 +528,12 @@ def drive(stream, calibration, car, args):
     low, high = calibration["relaxed"], calibration["focused"]
     note("SPACE = start/pause the car   R = recalibrate   Q = quit")
     meter = ""
-    tick = time.monotonic()
+    tick = started = time.monotonic()
     while True:
         now = time.monotonic()
+        if args.simulate:  # 10 s stopped, 10 s forward, and so on
+            simulation["state"] = ("focused" if int((now - started) // 10) % 2
+                                   else "relaxed")
         pressed = key()
         if pressed == " ":
             armed = not armed
@@ -584,7 +609,15 @@ def main():
                              "build/muse_run_<time>.csv, 'none' for no log")
     parser.add_argument("--quiet", action="store_true",
                         help="do not speak the prompts")
+    parser.add_argument("--simulate", action="store_true",
+                        help="no headband: made-up data calibrates, then "
+                             "drives the car forward for 10 s and stops it "
+                             "for 10 s, in turn (implies --armed)")
     args = parser.parse_args()
+    if args.simulate:
+        args.armed = True
+        if args.source == "auto":
+            args.source = "bands"
     global run_log, speech
     speech = not args.quiet
     if args.log != "none":
@@ -611,6 +644,12 @@ def main():
     car = Car(None if args.serial == "none" else args.serial)
     stream = MuseStream(args.osc_port)
     stream.start()
+    if args.simulate:
+        threading.Thread(target=simulate_headband, args=(args.osc_port,),
+                         daemon=True).start()
+        say("Simulated headband. After a mock calibration the car moves "
+            "forward for ten seconds and stops for ten seconds, in turn. "
+            "Press Q to quit.")
     print(f"Listening for MuseLog on UDP {args.osc_port}; in its OSC settings "
           f"set Target IP to one of: {local_ips()}")
     try:

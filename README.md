@@ -55,7 +55,7 @@ The script sends `0` while paused, when no electrode has contact and when the st
 
 Jaw, forehead and neck muscle activity raises beta and gamma far more than attention does, so tensing up also drives the car. Blinks lower the MuseLog index but leave beta / alpha about unchanged.
 
-To try the chain without a headband, start `python tools/muse_drive.py --armed` and then `python tools/fake_muse.py`, which sends made-up relaxed and focused band powers in MuseLog's format; the car then runs for 25 s and stops for 25 s in turn.
+To test the car without a headband, double-click `Muse Car (simulated).cmd` (`python tools/muse_drive.py --simulate`). Made-up band powers run the mock calibration, then the car moves forward for 10 s and stops for 10 s, in turn, until Q. `tools/fake_muse.py` is the same generator as a separate program, for feeding a bridge started with `--armed`.
 
 ## Wiring and behavior
 

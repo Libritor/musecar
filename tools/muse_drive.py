@@ -381,8 +381,9 @@ class MuseBluetooth(threading.Thread):
                 pass
 
     def grade_contact(self):
-        """Horseshoe stand-in from the last second: 1 quiet, 2 noisy,
-        4 railed or very noisy."""
+        """Horseshoe stand-in from the last second: 1 quiet, 2 noisy, 4 off
+        (at a rail, flat, or far too noisy to be EEG). Grade-2 electrodes
+        stay in use; the median over electrodes copes."""
         with self.stream.lock:
             recent = [row for _, row in list(self.stream.raw)[-256:]]
         if len(recent) < 128:
@@ -390,8 +391,9 @@ class MuseBluetooth(threading.Thread):
         values = np.array(recent)
         spread = values.std(axis=0)
         mean = values.mean(axis=0)
-        railed = (mean < 30) | (mean > 1620)
-        grade = np.where(railed | (spread > 150), 4, np.where(spread > 50, 2, 1))
+        # EEG is tens of microvolts; hundreds mean a loose electrode.
+        off = (mean < 30) | (mean > 1620) | (spread < 0.5) | (spread > 300)
+        grade = np.where(off, 4, np.where(spread > 50, 2, 1))
         with self.stream.lock:
             self.stream.contact = (time.monotonic(), [int(g) for g in grade])
             self.stream.quality = [round(float(s), 1) for s in spread]
@@ -716,7 +718,7 @@ def calibrate(stream, source, car, args):
     if focused is None:
         return None
     beep()
-    enough = (seconds - SETTLE_S) / TICK_S / 2
+    enough = (seconds - SETTLE_S) / TICK_S / 4
     if len(relaxed) < enough or len(focused) < enough:
         say("Too little usable signal during the calibration. Check the "
             "electrode contact.")

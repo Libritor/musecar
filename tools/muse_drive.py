@@ -247,6 +247,7 @@ class MuseBluetooth(threading.Thread):
         self.name = (name or "").lower()
         self.connected = None  # the headband's address while linked
         self.unpaired = False  # Windows' old pairing removed once on failure
+        self.accel_packets = self.accel_odd = 0  # for the connection note
 
     def run(self):
         asyncio.run(self.loop())
@@ -317,15 +318,19 @@ class MuseBluetooth(threading.Thread):
 
         def on_accel(_sender, data):
             # 16-bit counter, then three samples of x, y, z as int16
+            if len(data) < 20:
+                self.accel_odd += 1
+                return
             values = struct.unpack(">H9h", bytes(data[:20]))[1:]
             xyz = [sum(values[k::3]) / 3.0 * MUSE_ACCEL_SCALE for k in range(3)]
             with self.stream.lock:
                 self.stream.set_accel(xyz, time.monotonic())
+            self.accel_packets += 1
 
         try:
             await link.start_notify(MUSE_ACCEL, on_accel)
-        except Exception:  # no accelerometer characteristic: no steering
-            pass
+        except Exception as error:  # no accelerometer: no steering
+            note(f"No accelerometer notifications ({error}): steering off.")
 
         def command(text):
             body = text.encode("ascii") + b"\n"
@@ -346,9 +351,15 @@ class MuseBluetooth(threading.Thread):
             return
         self.connected = link.address
         note(f"Headband connected over Bluetooth (preset {preset}).")
+        seconds = 0
         while not gone.is_set():
             await command("k")  # keep-alive
             self.grade_contact()
+            seconds += 1
+            if seconds == 3:
+                note(f"Accelerometer: {self.accel_packets} packets in 3 s"
+                     + (f", {self.accel_odd} too short" if self.accel_odd
+                        else "") + ".")
             try:
                 await asyncio.wait_for(gone.wait(), timeout=1.0)
             except asyncio.TimeoutError:
@@ -530,27 +541,30 @@ def say(text):
 
 last_shown = 0.0
 status_line_open = False  # the console cursor sits on a status line
+console = threading.Lock()  # the Bluetooth thread prints notes too
 
 
 def show(text):
     """Status on one console line; once a second when output is a file."""
     global last_shown, status_line_open
-    if sys.stdout.isatty():
-        width = shutil.get_terminal_size().columns - 1
-        print("\r" + text[:width].ljust(width), end="", flush=True)
-        status_line_open = True
-    elif time.monotonic() - last_shown >= 1.0:
-        last_shown = time.monotonic()
-        print(text, flush=True)
+    with console:
+        if sys.stdout.isatty():
+            width = shutil.get_terminal_size().columns - 1
+            print("\r" + text[:width].ljust(width), end="", flush=True)
+            status_line_open = True
+        elif time.monotonic() - last_shown >= 1.0:
+            last_shown = time.monotonic()
+            print(text, flush=True)
 
 
 def note(text):
     """A message on its own line, below any status line."""
     global status_line_open
-    if status_line_open:
-        print()
-        status_line_open = False
-    print(text, flush=True)
+    with console:
+        if status_line_open:
+            print()
+            status_line_open = False
+        print(text, flush=True)
 
 
 run_log = None  # csv.writer when --log is given

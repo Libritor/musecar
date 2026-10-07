@@ -693,10 +693,9 @@ def calibrate(stream, source, car, args):
             "electrode contact.")
         return {}
     chosen = choose_index(relaxed, focused, args.index)
-    if not chosen or chosen["separation"] < 1.0:
-        say("Calibration failed: relaxed and focused did not separate. Fix "
-            "the electrode contact, wet the sensors and move hair away from "
-            "the ones behind the ears, then press space to try again.")
+    if not chosen:
+        say("Calibration failed: focused did not come out above relaxed. "
+            "Check the electrode contact, then press space to try again.")
         return {}
     result = dict(chosen, source=source, tilt=None)
     if not args.no_steer:
@@ -704,8 +703,8 @@ def calibrate(stream, source, car, args):
         if tilt == "quit":
             return None
         result["tilt"] = tilt
-    verdict = ("Calibration done, but the two states overlap a lot; press R "
-               "to try again." if chosen["separation"] < 1.5
+    verdict = ("Calibration done. The two states overlap a lot; R tries "
+               "again, or drive anyway." if chosen["separation"] < 1.5
                else "Calibration done.")
     say(verdict + (" The car is live." if args.armed
                    else " Press space to let the car move."))

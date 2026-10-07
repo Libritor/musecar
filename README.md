@@ -45,7 +45,9 @@ Session checklist (one-time: `pip install pyserial python-osc numpy`; the board 
 5. Press SPACE when it asks. Calibration is spoken as well as printed: eyes closed and relaxed until the beep, then eyes open counting down from 300 in sevens until the second beep. It then reports how well the two states separate.
 6. Press SPACE to let the car move. Focus drives it forward, relaxing with eyes closed stops it. SPACE pauses, R recalibrates, Q quits. If the board is unplugged mid-run the bridge reconnects by itself and pauses the car until SPACE.
 
-Options: `--serial COMx` or `--serial none` (no car), `--reuse` (skip calibration on a restart), `--quiet` (no speech), `--log none` (every tick is otherwise logged to build/muse_run_<time>.csv, which is how a run can be looked at afterwards).
+Options: `--serial COMx` or `--serial none` (no car), `--reuse` (skip calibration on a restart), `--quiet` (no speech), `--power full` (100% PWM instead of 75%), `--log none` (every tick is otherwise logged to build/muse_run_<time>.csv, which is how a run can be looked at afterwards).
+
+**Without the phone:** `Muse Car (Bluetooth).cmd` (`python tools/muse_drive.py --muse`) connects the headband straight to this PC over Bluetooth with the protocol muselsl and Mind Monitor use (`pip install bleak`). The headband must be on and not connected to the phone. Contact is then estimated from the signal (quiet = 1, noisy = 2, railed or very noisy = 4) instead of coming from the horseshoe. If Windows has an old pairing of the headband, every connection drops within a second; the bridge removes that pairing once and retries (verified 2026-10-07 on Muse-D31E: 252 samples/s per electrode after unpairing).
 
 Band powers are computed on the PC from the raw EEG (`/muse/eeg`, 2 s windows). MuseLog's own `*_absolute` band powers are only a fallback: in a live stream on 2026-10-04 they were exactly 0 for TP9 and AF8 and stayed unchanged for seconds at TP10. At 64 Hz (full rate off) there is no gamma band.
 

@@ -27,9 +27,11 @@ every tick is logged to build/muse_run_<time>.csv.
     python tools/muse_drive.py --serial COM7
     python tools/muse_drive.py --serial none   # no car: watch the index only
     python tools/muse_drive.py --simulate      # no headband: bench-test the car
+    python tools/muse_drive.py --muse          # headband over PC Bluetooth, no phone
 """
 
 import argparse
+import asyncio
 import collections
 import csv
 import ctypes
@@ -190,6 +192,140 @@ class MuseStream(threading.Thread):
         if rate == 64:  # gamma lies above what 64 Hz can represent
             power["gamma"] = np.zeros(4)
         return power
+
+
+MUSE_CONTROL = "273e0001-4c4d-454d-96be-f03bac821358"
+MUSE_EEG = ("273e0003-4c4d-454d-96be-f03bac821358",   # TP9
+            "273e0004-4c4d-454d-96be-f03bac821358",   # AF7
+            "273e0005-4c4d-454d-96be-f03bac821358",   # AF8
+            "273e0006-4c4d-454d-96be-f03bac821358")   # TP10
+MUSE_PRESETS = ("p21", "p20", "p1031")  # tried in turn until EEG arrives
+MUSE_SCALE = 1650.0 / 4095.0            # 12-bit count -> libmuse microvolts
+
+
+class MuseBluetooth(threading.Thread):
+    """The headband over this PC's Bluetooth, no phone app: the protocol
+    muselsl and Mind Monitor use. Each EEG electrode is a GATT
+    characteristic notifying 20-byte packets, a 16-bit counter and twelve
+    12-bit samples at 256 Hz. Rows go into `stream.raw` like /muse/eeg,
+    and a rough contact grade stands in for the horseshoe."""
+
+    def __init__(self, stream, name):
+        super().__init__(daemon=True)
+        self.stream = stream
+        self.name = (name or "").lower()
+        self.connected = None  # the headband's address while linked
+        self.unpaired = False  # Windows' old pairing removed once on failure
+
+    def run(self):
+        asyncio.run(self.loop())
+
+    async def loop(self):
+        from bleak import BleakClient, BleakScanner
+        while True:
+            found = await BleakScanner.discover(timeout=5.0, return_adv=True)
+            muses = sorted(
+                ((adv.rssi, dev) for dev, adv in found.values()
+                 if "muse" in (dev.name or "").lower() and
+                 self.name in (dev.name or "").lower()),
+                key=lambda pair: -pair[0])
+            if not muses:
+                await asyncio.sleep(1.0)
+                continue
+            device = muses[0][1]
+            gone = asyncio.Event()
+            try:
+                async with BleakClient(
+                        device, disconnected_callback=lambda _: gone.set()) as link:
+                    await self.stream_from(link, gone)
+                    note(f"{device.name}: connection lost.")
+            except Exception as error:  # bleak raises many kinds; retry
+                note(f"{device.name}: {type(error).__name__} {error}")
+                if not self.unpaired:
+                    # A stale Windows pairing of the headband makes every
+                    # connection drop within a second ("Unreachable").
+                    self.unpaired = True
+                    try:
+                        await BleakClient(device).unpair()
+                        note("Removed Windows' old pairing of the headband; "
+                             "retrying.")
+                    except Exception:
+                        pass
+            self.connected = None
+            await asyncio.sleep(1.0)
+
+    async def stream_from(self, link, gone):
+        pending = {}  # packet counter -> {electrode: samples}
+        got = asyncio.Event()
+
+        def handler(electrode):
+            def on_packet(_sender, data):
+                counter = (data[0] << 8) | data[1]
+                samples = []
+                for k in range(2, 20, 3):
+                    a, b, c = data[k], data[k + 1], data[k + 2]
+                    samples += [(a << 4) | (b >> 4), ((b & 0x0F) << 8) | c]
+                packet = pending.setdefault(counter, {})
+                packet[electrode] = samples
+                if len(packet) < 4:
+                    return
+                del pending[counter]
+                for old in [c for c in pending if (counter - c) % 65536 > 50]:
+                    del pending[old]
+                now = time.monotonic()
+                with self.stream.lock:
+                    self.stream.first_packet = self.stream.first_packet or now
+                    self.stream.last_packet = now
+                    for i in range(12):
+                        self.stream.raw.append(
+                            (now, [packet[e][i] * MUSE_SCALE for e in range(4)]))
+                got.set()
+            return on_packet
+
+        for electrode, uuid in enumerate(MUSE_EEG):
+            await link.start_notify(uuid, handler(electrode))
+
+        def command(text):
+            body = text.encode("ascii") + b"\n"
+            return link.write_gatt_char(MUSE_CONTROL, bytes([len(body)]) + body,
+                                        response=False)
+
+        for preset in MUSE_PRESETS:
+            await command("h")
+            await command(preset)
+            await command("d")
+            try:
+                await asyncio.wait_for(got.wait(), timeout=5.0)
+                break
+            except asyncio.TimeoutError:
+                continue
+        else:
+            note("The headband connected but sent no EEG with any preset.")
+            return
+        self.connected = link.address
+        note(f"Headband connected over Bluetooth (preset {preset}).")
+        while not gone.is_set():
+            await command("k")  # keep-alive
+            self.grade_contact()
+            try:
+                await asyncio.wait_for(gone.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
+
+    def grade_contact(self):
+        """Horseshoe stand-in from the last second: 1 quiet, 2 noisy,
+        4 railed or very noisy."""
+        with self.stream.lock:
+            recent = [row for _, row in list(self.stream.raw)[-256:]]
+        if len(recent) < 128:
+            return
+        values = np.array(recent)
+        spread = values.std(axis=0)
+        mean = values.mean(axis=0)
+        railed = (mean < 30) | (mean > 1620)
+        grade = np.where(railed | (spread > 150), 4, np.where(spread > 50, 2, 1))
+        with self.stream.lock:
+            self.stream.contact = (time.monotonic(), [int(g) for g in grade])
 
 
 class Car:
@@ -382,7 +518,7 @@ def record(phase, stream, now, ratios, *driving):
 
 def contact_text(stream, now):
     if not stream.last_packet or now - stream.last_packet > 2.0:
-        return "NO DATA FROM MUSELOG (is it streaming?)"
+        return "NO DATA FROM THE HEADBAND"
     contact = stream.horseshoe(now)
     if not contact:
         return ""
@@ -424,15 +560,15 @@ def wait_for_signal(stream, wanted, car):
                          "settings.")
                 return source
         if stream.first_packet:
-            show("MuseLog is streaming; waiting for electrode contact.  " +
+            show("Headband data arriving; waiting for electrode contact.  " +
                  contact_text(stream, now))
         else:
-            show("Waiting for MuseLog packets...")
+            show("Waiting for the headband...")
             if not hinted and now - started > 8:
                 hinted = True
-                note("Nothing yet. Check: phone and PC on the same Wi-Fi, "
-                     "Target IP is this PC, the port matches, Start "
-                     "Streaming is pressed.")
+                note("Nothing yet. MuseLog: phone and PC on the same Wi-Fi, "
+                     "Target IP is this PC, Start Streaming pressed. "
+                     "Bluetooth: headband on and not connected to the phone.")
         time.sleep(TICK_S)
 
 
@@ -622,6 +758,11 @@ def main():
                              "build/muse_run_<time>.csv, 'none' for no log")
     parser.add_argument("--quiet", action="store_true",
                         help="do not speak the prompts")
+    parser.add_argument("--muse", nargs="?", const="", metavar="NAME",
+                        help="connect the headband over this PC's Bluetooth "
+                             "instead of MuseLog (optionally by name, e.g. "
+                             "Muse-D31E); it must not be connected to the "
+                             "phone")
     parser.add_argument("--power", choices=("normal", "full"), default="normal",
                         help="forward at 75%% PWM (normal) or full power")
     parser.add_argument("--simulate", action="store_true",
@@ -660,6 +801,12 @@ def main():
     car.forward = b"2" if args.power == "full" else b"1"
     stream = MuseStream(args.osc_port)
     stream.start()
+    if args.muse is not None:
+        if args.source == "auto":
+            args.source = "raw"
+        MuseBluetooth(stream, args.muse).start()
+        note("Looking for the headband over Bluetooth (it must be on and not "
+             "connected to the phone).")
     if args.simulate:
         threading.Thread(target=simulate_headband, args=(args.osc_port,),
                          daemon=True).start()

@@ -62,6 +62,12 @@ Jaw, forehead and neck muscle activity raises beta and gamma far more than atten
 
 To test the car without a headband, double-click `Muse Car (simulated).cmd` (`python tools/muse_drive.py --simulate`). Made-up band powers run the mock calibration, then the car moves forward for 10 s and stops for 10 s, in turn, until Q. `tools/fake_muse.py` is the same generator as a separate program, for feeding a bridge started with `--armed`. `python tools/motor_test.py` spins the motors directly, 4 s at 75% then 4 s at full power, printing the board's replies; `muse_drive.py --power full` drives at full power instead of 75%.
 
+## Printed hood
+
+`case/car_case.stl` is a one-piece hood that sits over the chassis: 155 x 220 x 65 mm outside, 150 mm wide inside (the 127 mm plate plus its tabs), 55 mm of headroom above the plate, 2.4 mm walls, and an 8 mm skirt that wraps the plate's edge. It has wheel arches for the 65 mm wheels, a micro-USB slot and a wire notch at the front, an 80 x 34 mm opening at the rear for the L298N heatsink's air and the wires, roof vents over the driver, a 70 x 22 mm window over the Nucleo's buttons and LEDs, and two grooves for the zip ties that hold it down. `case/car_case_rear.stl` and `case/car_case_front.stl` are the same hood split at the wheel arches for beds shorter than 220 mm, with a 10 mm lap lip on the rear half and an M3 hole through each side.
+
+Print it upside down (roof on the bed), 0.2 mm layers, 3 perimeters, no supports; a brim helps the rounded roof edge. Every dimension comes from the `PARAMS` block at the top of `tools/case.py` (`pip install manifold3d numpy-stl`, then `python tools/case.py`; `tools/case_preview.py` renders `case/preview.png`). The lengths were read off the photos against the Nucleo's known 133 x 70 mm, so check the Nucleo's overhang (inner wall 157 mm ahead of the axle) and the heatsink (58 mm behind it) against the car before printing.
+
 ## Wiring and behavior
 
 | STM32 pin | Driver connection |

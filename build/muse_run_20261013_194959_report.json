@@ -1,0 +1,76 @@
+{
+  "log": "muse_run_20261013_194959.csv",
+  "trials": 3,
+  "agreement": 1.0,
+  "agreement_ci95": [
+    1.0,
+    1.0
+  ],
+  "chance_agreement": 0.497,
+  "chance_p_value": 0.344,
+  "constant_controllers": {
+    "always forward": 0.54,
+    "always stopped": 0.46
+  },
+  "by_cue": {
+    "focus": {
+      "trials": 1,
+      "agreement": 1.0,
+      "success": 1.0,
+      "latency_median": 2.1,
+      "latency_max": 2.1,
+      "not_reached": 0
+    },
+    "relax": {
+      "trials": 2,
+      "agreement": 1.0,
+      "success": 1.0,
+      "latency_median": 1.0,
+      "latency_max": 2.0,
+      "not_reached": 0
+    }
+  },
+  "flips_per_minute": 0.0,
+  "signal_auc_focus_vs_relax": 1.0,
+  "link": {
+    "board_confirming": 1.0,
+    "confirmed_matching": 0.998,
+    "unplugged_ticks": 0,
+    "no_signal_ticks": 0
+  },
+  "per_trial": [
+    {
+      "cue": "relax",
+      "seconds": 16.2,
+      "latency": 0.0,
+      "success": true,
+      "agreement": 1.0,
+      "settled_ticks": 113,
+      "settled_ok": 113,
+      "flips": 0,
+      "settled_minutes": 0.18833333333333332
+    },
+    {
+      "cue": "focus",
+      "seconds": 48.2,
+      "latency": 2.0999999046325684,
+      "success": true,
+      "agreement": 1.0,
+      "settled_ticks": 433,
+      "settled_ok": 433,
+      "flips": 0,
+      "settled_minutes": 0.7216666666666667
+    },
+    {
+      "cue": "relax",
+      "seconds": 30.5,
+      "latency": 2.0,
+      "success": true,
+      "agreement": 1.0,
+      "settled_ticks": 256,
+      "settled_ok": 256,
+      "flips": 0,
+      "settled_minutes": 0.4266666666666667
+    }
+  ]
+}

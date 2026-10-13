@@ -1,0 +1,109 @@
+{
+  "log": "muse_run_20261013_195233.csv",
+  "trials": 6,
+  "agreement": 1.0,
+  "agreement_ci95": [
+    1.0,
+    1.0
+  ],
+  "chance_agreement": 0.497,
+  "chance_p_value": 0.047,
+  "constant_controllers": {
+    "always forward": 0.528,
+    "always stopped": 0.472
+  },
+  "by_cue": {
+    "focus": {
+      "trials": 3,
+      "agreement": 1.0,
+      "success": 1.0,
+      "latency_median": 2.1,
+      "latency_max": 2.1,
+      "not_reached": 0
+    },
+    "relax": {
+      "trials": 3,
+      "agreement": 1.0,
+      "success": 1.0,
+      "latency_median": 2.0,
+      "latency_max": 2.1,
+      "not_reached": 0
+    }
+  },
+  "flips_per_minute": 0.0,
+  "signal_auc_focus_vs_relax": 1.0,
+  "link": {
+    "board_confirming": 0.985,
+    "confirmed_matching": 0.995,
+    "unplugged_ticks": 1,
+    "no_signal_ticks": 0
+  },
+  "per_trial": [
+    {
+      "cue": "relax",
+      "seconds": 16.5,
+      "latency": 0.0,
+      "success": true,
+      "agreement": 1.0,
+      "settled_ticks": 116,
+      "settled_ok": 116,
+      "flips": 0,
+      "settled_minutes": 0.19333333333333333
+    },
+    {
+      "cue": "focus",
+      "seconds": 12.9,
+      "latency": 2.1000001430511475,
+      "success": true,
+      "agreement": 1.0,
+      "settled_ticks": 80,
+      "settled_ok": 80,
+      "flips": 0,
+      "settled_minutes": 0.13333333333333333
+    },
+    {
+      "cue": "relax",
+      "seconds": 13.3,
+      "latency": 2.0,
+      "success": true,
+      "agreement": 1.0,
+      "settled_ticks": 84,
+      "settled_ok": 84,
+      "flips": 0,
+      "settled_minutes": 0.14
+    },
+    {
+      "cue": "focus",
+      "seconds": 16.4,
+      "latency": 2.0999999046325684,
+      "success": true,
+      "agreement": 1.0,
+      "settled_ticks": 115,
+      "settled_ok": 115,
+      "flips": 0,
+      "settled_minutes": 0.19166666666666668
+    },
+    {
+      "cue": "relax",
+      "seconds": 15.4,
+      "latency": 2.0999999046325684,
+      "success": true,
+      "agreement": 1.0,
+      "settled_ticks": 105,
+      "settled_ok": 105,
+      "flips": 0,
+      "settled_minutes": 0.175
+    },
+    {
+      "cue": "focus",
+      "seconds": 19.5,
+      "latency": 2.0,
+      "success": true,
+      "agreement": 1.0,
+      "settled_ticks": 146,
+      "settled_ok": 146,
+      "flips": 0,
+      "settled_minutes": 0.24333333333333335
+    }
+  ]
+}

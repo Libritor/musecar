@@ -62,6 +62,20 @@ Jaw, forehead and neck muscle activity raises beta and gamma far more than atten
 
 To test the car without a headband, double-click `Muse Car (simulated).cmd` (`python tools/muse_drive.py --simulate`). Made-up band powers run the mock calibration, then the car moves forward for 10 s and stops for 10 s, in turn, until Q. `tools/fake_muse.py` is the same generator as a separate program, for feeding a bridge started with `--armed`. `python tools/motor_test.py` spins the motors directly, 4 s at 75% then 4 s at full power, printing the board's replies; `muse_drive.py --power full` drives at full power instead of 75%.
 
+## Measuring how well the car obeys
+
+`python tools/muse_drive.py --muse --test 10` runs the normal calibration and then, once the car is armed, a cued test: 10 "focus" and 10 "relax" cues in random order, each held 12-20 s, spoken as they come, with the cue logged next to the command the car was sent. `--test-steer 5` adds tilt-left, tilt-right and head-straight cues. When the cues run out the bridge writes `build/muse_run_<time>_report.json` and prints the numbers; `python tools/intent_report.py <log.csv>` does the same for any cued log. The report gives:
+
+- **Agreement:** the share of ticks, after a 5 s grace period following each cue, on which the car's command matched the cue, with a trial-level 95% interval, per cue, and what a car that ignores the wearer would score (cues shuffled across trials, with a p-value; always-forward; always-stopped). Balanced cues put the chance level near 50%.
+- **Latency and success:** seconds from each cue to the car first holding the matching command for a second; a trial succeeds if that happens within 8 s. Reported per direction, since switching on and switching off need not be equally quick.
+- **Stability:** unprompted command flips per minute once a trial has settled.
+- **Signal:** the AUC of the index between focus and relax ticks, which tells whether a poor score comes from the EEG or from the thresholds.
+- **Link:** how often the board confirmed what it was sent, and how many ticks had no board or no headband data.
+
+Worth testing beyond that, in the same way: a relax-only block (false activations per minute while the wearer never intends to drive); cued artifacts (jaw clench, blinking, talking, head turn) to see how far each pushes the index; two calibrations back to back and across days for repeatability; and the test repeated with `--serial none` against a run with the car moving, to see whether watching the car move changes the wearer's state.
+
+The chain itself can be rehearsed without the car or the headband: `python tools/fake_board.py` stands in for the board (`--serial socket://127.0.0.1:7777`), `--simulate` for the headband; a simulated wearer obeys the cues after 1 s, so `--simulate --test 3 --serial socket://127.0.0.1:7777` exercises the whole test and report.
+
 ## Printed hood
 
 `case/car_case.stl` is a one-piece hood that sits over the chassis: 155 x 220 x 65 mm outside, 150 mm wide inside (the 127 mm plate plus its tabs), 55 mm of headroom above the plate, 2.4 mm walls, and an 8 mm skirt that wraps the plate's edge. It has wheel arches for the 65 mm wheels, a micro-USB slot and a wire notch at the front, an 80 x 34 mm opening at the rear for the L298N heatsink's air and the wires, roof vents over the driver, a 70 x 22 mm window over the Nucleo's buttons and LEDs, and two grooves for the zip ties that hold it down. `case/car_case_rear.stl` and `case/car_case_front.stl` are the same hood split at the wheel arches for beds shorter than 220 mm, with a 10 mm lap lip on the rear half and an M3 hole through each side.

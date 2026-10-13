@@ -44,6 +44,7 @@ import ctypes
 import json
 import math
 from pathlib import Path
+import random
 import re
 import shutil
 import socket
@@ -584,7 +585,8 @@ def note(text):
         print(text, flush=True)
 
 
-run_log = None  # csv.writer when --log is given
+run_log = None  # csv.writer of the tick log, when there is one
+run_log_path = None
 
 
 def record(phase, stream, now, ratios, *driving):
@@ -594,7 +596,7 @@ def record(phase, stream, now, ratios, *driving):
                   for name in INDEXES]
         run_log.writerow([f"{time.time():.2f}", phase, *values,
                           *(stream.horseshoe(now) or [""] * 4),
-                          *(driving or [""] * 6),
+                          *(driving or [""] * 8),
                           *(stream.quality or [""] * 4)])
 
 
@@ -836,12 +838,48 @@ def drive(stream, calibration, car, args):
     high = low + gap
     note("SPACE = start/pause the car   R = recalibrate   Q = quit")
     meter = ""
+    # Cued test: a shuffled, balanced list of what the wearer is asked to
+    # do; each cue lasts 12-20 s and is logged next to what the car did.
+    cues = None
+    if args.test or args.test_steer:
+        # Every cue changes the command, so "relax" alternates with the
+        # driving cues in shuffled order; the timing is what is random.
+        driving = ["focus"] * args.test
+        if args.test_steer and calibration.get("tilt"):
+            driving += ["left", "right", "straight"] * args.test_steer
+        random.shuffle(driving)
+        schedule = []
+        for i, name in enumerate(driving):
+            schedule += ["relax", name]
+        if random.random() < 0.5:
+            schedule = schedule[1:] + ["relax"]
+        cues = collections.deque(f"{name}#{i + 1}" for i, name in enumerate(schedule))
+        note(f"Cued test: {len(cues)} trials, starting when the car is armed.")
+    cue, cue_until, simulated_switch = "", 0.0, None
     tick = started = time.monotonic()
     while True:
         now = time.monotonic()
-        if args.simulate:  # 10 s stopped, 10 s forward, and so on
-            simulation["state"] = ("focused" if int((now - started) // 10) % 2
-                                   else "relaxed")
+        if cues is not None and armed and now >= cue_until:
+            if cue and not cues:
+                car.send(False, now)
+                say("Test done.")
+                return "test"
+            cue = cues.popleft()
+            cue_until = now + random.uniform(12.0, 20.0)
+            say({"focus": "Focus. Count down from 300 in sevens.",
+                 "relax": "Relax. Close your eyes.",
+                 "left": "Focus and tilt your head left.",
+                 "right": "Focus and tilt your head right.",
+                 "straight": "Focus, head straight."}[cue.split("#")[0]])
+            simulated_switch = now + 1.0  # a simulated wearer's reaction
+        if args.simulate:
+            if cues is None:  # 10 s stopped, 10 s forward, and so on
+                simulation["state"] = ("focused" if int((now - started) // 10) % 2
+                                       else "relaxed")
+            elif simulated_switch and now >= simulated_switch:
+                simulation["state"] = ("relaxed" if cue.startswith("relax")
+                                       else "focused")
+                simulated_switch = None
         pressed = key()
         if pressed == " ":
             armed = not armed
@@ -887,7 +925,8 @@ def drive(stream, calibration, car, args):
             armed = args.armed
         record("drive", stream, now, ratios, round(level, 3) if ratios else "",
                int(armed), int(moving), car.status(now),
-               "" if tilt is None else round(tilt, 2), steer or "")
+               "" if tilt is None else round(tilt, 2), steer or "",
+               command.decode(), cue)
         wheel = ("" if tilt is None else
                  {"left": "<< LEFT ", "right": " RIGHT >>"}.get(steer, " straight"))
         show(f"[{'ARMED ' if armed else 'PAUSED'}] {meter} {wheel}  "
@@ -937,6 +976,12 @@ def main():
                              "phone")
     parser.add_argument("--no-steer", action="store_true",
                         help="no head-tilt steering (skips its calibration)")
+    parser.add_argument("--test", type=int, default=0, metavar="N",
+                        help="cued test after arming: N focus and N relax "
+                             "cues in random order, then a report")
+    parser.add_argument("--test-steer", type=int, default=0, metavar="N",
+                        help="add N cues each of tilt left, tilt right and "
+                             "head straight to the test")
     parser.add_argument("--power", choices=("normal", "full"), default="normal",
                         help="forward at 75%% PWM (normal) or full power")
     parser.add_argument("--simulate", action="store_true",
@@ -948,7 +993,7 @@ def main():
         args.armed = True
         if args.source == "auto":
             args.source = "bands"
-    global run_log, speech
+    global run_log, run_log_path, speech
     speech = not args.quiet
     if args.log != "none":
         path = Path(args.log)
@@ -956,10 +1001,11 @@ def main():
             path = (CALIBRATION.parent /
                     time.strftime("muse_run_%Y%m%d_%H%M%S.csv"))
         path.parent.mkdir(parents=True, exist_ok=True)
+        run_log_path = path
         run_log = csv.writer(open(path, "w", newline="", buffering=1))
         run_log.writerow(["time", "phase", *INDEXES, *CHANNELS, "level",
-                          "armed", "sent", "car", "tilt", "steer",
-                          *(f"spread_{name}" for name in CHANNELS)])
+                          "armed", "sent", "car", "tilt", "steer", "cmd",
+                          "cue", *(f"spread_{name}" for name in CHANNELS)])
         print(f"Logging every tick to {path}")
     if not args.stop < args.go:
         parser.error("--stop must be below --go")
@@ -1010,7 +1056,13 @@ def main():
                 CALIBRATION.parent.mkdir(parents=True, exist_ok=True)
                 CALIBRATION.write_text(json.dumps(calibration, indent=2),
                                        encoding="utf-8")
-            if drive(stream, calibration, car, args) == "q":
+            ended = drive(stream, calibration, car, args)
+            if ended == "test":
+                if run_log_path:
+                    import intent_report
+                    intent_report.report(run_log_path)
+                break
+            if ended == "q":
                 break
             calibration = None
     except KeyboardInterrupt:

@@ -11,8 +11,9 @@ reports:
               that ignores the wearer (constant forward, constant stop,
               and the cues shuffled across trials: the chance level)
   latency     seconds from each cue to the car first holding the matching
-              command for a second; the share of trials that got there
-              within 8 s is the success rate
+              command for a second; a trial succeeds if that happens within
+              8 s and the command then matches on at least 70% of the
+              settled ticks
   stability   unprompted command changes per minute once a trial has
               settled, i.e. how often the car flips on its own
   signal      how separable the index was between focus and relax cues
@@ -76,10 +77,14 @@ def analyse(trials):
         cmds = [r.get("cmd") or r["sent"] for r in ticks]
         flips = sum(1 for i in range(1, len(ticks))
                     if settled[i] and cmds[i] != cmds[i - 1])
+        agreement = float(ok[settled].mean()) if settled.any() else None
         per_trial.append(dict(
             cue=cue, seconds=round(float(times[-1]), 1), latency=latency,
-            success=latency is not None and latency <= SUCCESS_S,
-            agreement=float(ok[settled].mean()) if settled.any() else None,
+            # Reached in time and then mostly kept: a car that merely passes
+            # through the right state does not get credit.
+            success=(latency is not None and latency <= SUCCESS_S and
+                     agreement is not None and agreement >= 0.7),
+            agreement=agreement,
             settled_ticks=int(settled.sum()), settled_ok=int(ok[settled].sum()),
             flips=flips, settled_minutes=float(settled.sum()) / 600.0))
     return per_trial

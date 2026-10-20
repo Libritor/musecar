@@ -418,6 +418,7 @@ class Car:
         self.retry_at = 0.0
         self.forward = b"1"  # b"2" for full power
         self.last_sent = b"0"
+        self.steer_since = None  # when the newest steering byte was first sent
         self.text = b""
         self.report = None  # (time, "SERIAL" or "BUTTON", cmd) from the board
 
@@ -440,6 +441,11 @@ class Car:
             return True
         if not isinstance(command, bytes):
             command = self.forward if command else b"0"
+        if command in (b"3", b"4"):
+            if self.last_sent != command:
+                self.steer_since = now
+        else:
+            self.steer_since = None
         self.last_sent = command
         try:
             if not self.link:
@@ -473,7 +479,9 @@ class Car:
             return "car silent"
         if self.report[1] == "BUTTON":
             return "board ignores serial: flash build/serial/Car_Demo.hex"
-        if self.last_sent in (b"3", b"4") and self.report[2] < 3:
+        if (self.last_sent in (b"3", b"4") and self.report[2] < 3
+                and self.steer_since is not None and now - self.steer_since > 0.5):
+            # the board echoes a new byte one tick late; only a reply that stays below 3 means old firmware
             return "board firmware has no steering: flash build/serial/Car_Demo.hex"
         return f"car cmd={self.report[2]}"
 

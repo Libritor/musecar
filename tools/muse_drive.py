@@ -881,12 +881,15 @@ def drive(stream, calibration, car, args):
                  "straight": "Focus, head straight."}[cue.split("#")[0]])
             simulated_switch = now + 1.0  # a simulated wearer's reaction
         if args.simulate:
-            if cues is None:  # 10 s stopped, 10 s forward, and so on
+            if cues is None or args.simulate_wearer == "blind":
+                # 10 s stopped, 10 s forward, and so on, cues or no cues
                 simulation["state"] = ("focused" if int((now - started) // 10) % 2
                                        else "relaxed")
             elif simulated_switch and now >= simulated_switch:
-                simulation["state"] = ("relaxed" if cue.startswith("relax")
-                                       else "focused")
+                wanted = "relaxed" if cue.startswith("relax") else "focused"
+                if args.simulate_wearer == "swapped":
+                    wanted = "focused" if wanted == "relaxed" else "relaxed"
+                simulation["state"] = wanted
                 simulated_switch = None
         pressed = key()
         if pressed == " ":
@@ -986,7 +989,9 @@ def main():
                         help="no head-tilt steering (skips its calibration)")
     parser.add_argument("--test", type=int, default=0, metavar="N",
                         help="cued test after arming: N focus and N relax "
-                             "cues in random order, then a report")
+                             "cues, relax alternating with the driving cues "
+                             "(shuffled among themselves, first cue by coin "
+                             "flip), each 12-20 s at random, then a report")
     parser.add_argument("--test-steer", type=int, default=0, metavar="N",
                         help="add N cues each of tilt left, tilt right and "
                              "head straight to the test")
@@ -996,6 +1001,11 @@ def main():
                         help="no headband: made-up data calibrates, then "
                              "drives the car forward for 10 s and stops it "
                              "for 10 s, in turn (implies --armed)")
+    parser.add_argument("--simulate-wearer", choices=("obedient", "swapped", "blind"),
+                        default="obedient",
+                        help="in a simulated cued test: obedient switches state "
+                             "1 s after each cue, swapped does the opposite, "
+                             "blind ignores the cues and wanders 10 s on / 10 s off")
     args = parser.parse_args()
     if args.simulate:
         args.armed = True
